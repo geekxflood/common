@@ -3,21 +3,6 @@ name: Gosec
 
 on:
   push:
-    branches: ["main"]
-    paths:
-      - "**.go"
-      - "go.mod"
-      - "go.sum"
-      - ".gosec.json"
-  pull_request:
-    branches: ["main"]
-    paths:
-      - "**.go"
-      - "go.mod"
-      - "go.sum"
-      - ".gosec.json"
-  schedule:
-    - cron: "20 9 * * 0"
 
 jobs:
   gosec:

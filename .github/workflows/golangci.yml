@@ -3,21 +3,6 @@ name: Golangci
 
 on:
   push:
-    branches: ["main"]
-    paths:
-      - "**.go"
-      - "go.mod"
-      - "go.sum"
-      - ".golangci.yml"
-  pull_request:
-    branches: ["main"]
-    paths:
-      - "**.go"
-      - "go.mod"
-      - "go.sum"
-      - ".golangci.yml"
-  schedule:
-    - cron: "20 9 * * 0"
 
 jobs:
   golangci:
