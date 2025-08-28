@@ -1,5 +1,5 @@
 ---
-name: gosec
+name: Gosec
 
 on:
   push:
@@ -26,6 +26,7 @@ jobs:
     permissions:
       security-events: write
       contents: read
+      actions: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,6 +41,7 @@ jobs:
         with:
           args: -conf=.gosec.json -fmt=sarif -out=gosec-report.sarif ./...
       - name: Upload SARIF results to code scanning
+        if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: gosec-report.sarif

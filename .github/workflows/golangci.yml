@@ -1,5 +1,5 @@
 ---
-name: golangci-lint
+name: Golangci
 
 on:
   push:
@@ -26,6 +26,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+      security-events: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -42,10 +43,12 @@ jobs:
         with:
           args: --config=.golangci.yml --modules-download-mode=mod --output.sarif.path=golangci-report.sarif
       - name: Upload golangci-lint SARIF to code scanning
+        if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: golangci-report.sarif
       - name: Upload golangci-lint report artifact
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: golangci-lint-report
