@@ -6,9 +6,9 @@ A collection of Go packages shared across GeekxFlood projects.
 
 Current packages:
 
-- logging: Structured logging built on the standard log/slog
-- config: CUE-powered configuration loading, validation, and hot reload
-- helpers: Utilities package (foundation for future helpers)
+- [Logging](#logging): Structured logging built on the standard log/slog
+- [Config](#Config): CUE-powered configuration loading, validation, and hot reload
+- [Helpers](#Helpers): Utilities package (foundation for future helpers)
 
 Install packages:
 
