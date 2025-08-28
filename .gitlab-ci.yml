@@ -1,0 +1,48 @@
+---
+stages:
+  - security
+  - validate
+
+variables:
+  GO_VERSION: 1.25
+  IMAGE_TAG_LATEST: latest
+  GOLANG_IMAGE: $DOCKER_HUB_URL/library/golang:$GO_VERSION-alpine
+
+.setup_go_env: &setup_go_env |
+  export PATH=$PATH:$(go env GOPATH)/bin
+  export GOPROXY="$GOPROXY_ADDR"
+  export GOPRIVATE="gitlab-stel.prosdis.118-vaud.ch/*"
+  export GOSUMDB="off"
+  echo "$PKI_ROOT_CA" >> /usr/local/share/ca-certificates/ca-certificates.crt
+  echo "$PKI_WEB_01_CA" >> /usr/local/share/ca-certificates/prosdis-web-ca.crt
+  apk add --no-cache git ca-certificates
+  update-ca-certificates
+
+security:
+  stage: security
+  image: $GOLANG_IMAGE
+  rules:
+    - if: $CI_COMMIT_TAG
+      when: always
+  script:
+    - *setup_go_env
+    - go install github.com/securego/gosec/v2/cmd/gosec@latest
+    - gosec -conf=.gosec.json -fmt=json ./...
+  artifacts:
+    expire_in: 3 days
+    paths:
+      - gosec-report.json
+    reports:
+      sast: gosec-report.json
+
+validation:
+  stage: validate
+  image: $GOLANG_IMAGE
+  rules:
+    - if: $CI_COMMIT_TAG
+      when: always
+  script:
+    - *setup_go_env
+    - go mod tidy
+    - go fmt ./...
+    - go vet ./...
