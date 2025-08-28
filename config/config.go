@@ -448,7 +448,6 @@ func (l *cueSchemaLoader) GetValidator() (Validator, error) {
 	}, nil
 }
 
-
 // cueValidator implements the Validator interface using CUE.
 // It provides validation of configuration data against CUE schemas.
 type cueValidator struct {
