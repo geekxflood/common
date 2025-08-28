@@ -39,6 +39,10 @@ node_modules/
 .vs/
 *.iml
 
+# spellchecker dictionary
+.spellchecker.json
+*cspell.*
+
 # Environment and secrets
 .env
 .env.*
