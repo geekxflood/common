@@ -2,7 +2,7 @@
 
 ![Go Version](https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go) [![Go Reference](https://pkg.go.dev/badge/github.com/geekxflood/common.svg)](https://pkg.go.dev/github.com/geekxflood/common) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A small collection of Go packages shared across GeekxFlood projects.
+A collection of Go packages shared across GeekxFlood projects.
 
 Current packages:
 
