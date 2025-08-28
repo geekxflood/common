@@ -96,6 +96,7 @@ package logging
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -1021,17 +1022,47 @@ func WithGroup(name string) *slog.Logger {
 	return Get().WithGroup(name)
 }
 
-// openLogFile opens a log file for writing, creating directories if necessary.
+// openLogFile opens a log file for writing after validating the path and
+// creating parent directories with safe permissions.
 func openLogFile(filePath string) (*os.File, error) {
-	dir := filepath.Dir(filePath)
-	if err := os.MkdirAll(dir, 0750); err != nil {
+	if filePath == "" {
+		return nil, errors.New("log file path cannot be empty")
+	}
+
+	// Clean the path and perform basic traversal checks
+	cleanPath := filepath.Clean(filePath)
+	if strings.Contains(cleanPath, "..") {
+		return nil, fmt.Errorf("invalid log file path: contains directory traversal: %s", cleanPath)
+	}
+
+	// Disallow writing to sensitive system directories when absolute
+	if filepath.IsAbs(cleanPath) {
+		restricted := []string{"/etc/", "/proc/", "/sys/", "/dev/", "/run/secrets"}
+		for _, p := range restricted {
+			if strings.HasPrefix(cleanPath+"/", p) || cleanPath == strings.TrimSuffix(p, "/") {
+				return nil, fmt.Errorf("log file path not allowed: %s", cleanPath)
+			}
+		}
+	}
+
+	dir := filepath.Dir(cleanPath)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("failed to create log directory %s: %w", dir, err)
 	}
 
-	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600) // #nosec G304 - Opening user-specified log file is intended behavior
-	if err != nil {
-		return nil, fmt.Errorf("failed to open log file %s: %w", filePath, err)
+	// Refuse to open symlinks and non-regular files
+	if info, err := os.Lstat(cleanPath); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("refusing to open symlink for log file: %s", cleanPath)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("log path must be a regular file: %s", cleanPath)
+		}
 	}
 
+	file, err := os.OpenFile(cleanPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open log file %s: %w", cleanPath, err)
+	}
 	return file, nil
 }

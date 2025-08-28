@@ -23,11 +23,11 @@ vendor/
 node_modules/
 
 # IDE and editor files
-# .idea/
-# .zed/
-# .vscode/
-# .junie/
-# .augment/
+.idea/
+.zed/
+.vscode/
+.junie/
+.augment/
 *.swp
 *.swo
 *~

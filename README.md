@@ -1,5 +1,36 @@
+# github.com/geekxflood/common
 
-# Logging
+![Go Version](https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go) [![Go Reference](https://pkg.go.dev/badge/github.com/geekxflood/common.svg)](https://pkg.go.dev/github.com/geekxflood/common) [![Go Report Card](https://goreportcard.com/badge/github.com/geekxflood/common)](https://goreportcard.com/report/github.com/geekxflood/common) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+A small collection of Go packages shared across GeekxFlood projects.
+
+Current packages:
+
+- logging: Structured logging built on the standard log/slog
+- config: CUE-powered configuration loading, validation, and hot reload
+- helpers: Utilities package (foundation for future helpers)
+
+Install packages:
+
+```bash
+go get github.com/geekxflood/common/logging
+go get github.com/geekxflood/common/config
+```
+
+Quality gates:
+
+```bash
+# Lint
+golangci-lint run --config .golangci.yml
+
+# Security scan
+gosec -conf=.gosec.json -fmt=json ./...
+
+# Tests
+go test ./...
+```
+
+## Logging
 
 A comprehensive structured logging package for Go applications built on the standard `log/slog` package. This library provides enterprise-grade logging capabilities with a focus on performance, flexibility, and ease of use.
 
@@ -352,7 +383,7 @@ The logging package is built on Go's standard `log/slog`, providing excellent pe
 7. **Use JSON in production**: Machine-readable format for log aggregation
 8. **File rotation**: Implement external log rotation for file outputs
 
-# Config Package
+## Config
 
 A comprehensive configuration management package for Go applications built on CUE (cuelang.org) for schema definition and validation. This library provides enterprise-grade configuration capabilities with a focus on type safety, hot reload, and configuration-driven development.
 
@@ -560,22 +591,6 @@ Creates a new configuration manager with the specified options.
 #### NewSchemaLoader() SchemaLoader
 
 Creates a new CUE schema loader.
-
-### Templates
-
-The package includes pre-built CUE templates:
-
-- `templates/common.cue`: Basic server, database, logging, metrics configurations
-- `templates/webapp.cue`: Web application patterns (middleware, auth, CORS)
-- `templates/microservice.cue`: Microservice patterns (service discovery, circuit breakers, tracing)
-- `templates/example.cue`: Complete example configurations
-
-## Examples
-
-See the `examples/` directory for complete working examples:
-
-- **Basic Usage**: Simple configuration loading and access
-- **Hot Reload**: Automatic configuration reloading
 
 ## Testing
 
