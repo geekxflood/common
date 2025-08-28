@@ -1,3 +1,4 @@
+// Package config provides comprehensive configuration management for Go applications
 package config
 
 import (
@@ -32,8 +33,6 @@ func createTempFile(t *testing.T, content, suffix string) string {
 
 	return tmpFile.Name()
 }
-
-
 
 // Test CUE schema embedded directly in the test
 const testSchema = `
@@ -214,7 +213,7 @@ func TestNewManager(t *testing.T) {
 		},
 		{
 			name:        "schema with no package declaration",
-			schema:      "server: { host: string }",  // Missing package declaration
+			schema:      "server: { host: string }", // Missing package declaration
 			config:      testConfig,
 			expectError: true,
 		},
@@ -620,7 +619,7 @@ func TestManagerValidation(t *testing.T) {
 			expectError: true,
 		},
 		{
-			name: "invalid configuration - port out of range",
+			name:   "invalid configuration - port out of range",
 			schema: testSchema,
 			config: `
 app:

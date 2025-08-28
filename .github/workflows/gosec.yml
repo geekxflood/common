@@ -1,0 +1,45 @@
+---
+name: gosec
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - ".gosec.json"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - ".gosec.json"
+  schedule:
+    - cron: "20 9 * * 0"
+
+jobs:
+  gosec:
+    name: gosec (SAST)
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: true
+      - name: Gosec Security Checker
+        uses: securego/gosec@v2.22.8
+        with:
+          args: -conf=.gosec.json -fmt=sarif -out=gosec-report.sarif ./...
+      - name: Upload SARIF results to code scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: gosec-report.sarif
