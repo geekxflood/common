@@ -5,77 +5,64 @@ import (
 	"context"
 	"log/slog"
 	"testing"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
-func TestValidateLevel(t *testing.T) {
-	tests := []struct {
-		level string
-		valid bool
-	}{
-		{"debug", true},
-		{"info", true},
-		{"warn", true},
-		{"error", true},
-		{"DEBUG", true}, // case insensitive
-		{"INFO", true},
-		{"invalid", false},
-		{"", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.level, func(t *testing.T) {
-			if got := ValidateLevel(tt.level); got != tt.valid {
-				t.Errorf("ValidateLevel(%q) = %v, want %v", tt.level, got, tt.valid)
-			}
-		})
-	}
+func TestLogging(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Logging Suite")
 }
 
-func TestValidateFormat(t *testing.T) {
-	tests := []struct {
-		format string
-		valid  bool
-	}{
-		{"logfmt", true},
-		{"json", true},
-		{"LOGFMT", true}, // case insensitive
-		{"JSON", true},
-		{"invalid", false},
-		{"", false},
-	}
+var _ = Describe("ValidateLevel", func() {
+	DescribeTable("validating log levels",
+		func(level string, valid bool) {
+			result := ValidateLevel(level)
+			Expect(result).To(Equal(valid), "ValidateLevel(%q) = %v, want %v", level, result, valid)
+		},
+		Entry("debug level", "debug", true),
+		Entry("info level", "info", true),
+		Entry("warn level", "warn", true),
+		Entry("error level", "error", true),
+		Entry("DEBUG level (case insensitive)", "DEBUG", true),
+		Entry("INFO level (case insensitive)", "INFO", true),
+		Entry("invalid level", "invalid", false),
+		Entry("empty level", "", false),
+	)
+})
 
-	for _, tt := range tests {
-		t.Run(tt.format, func(t *testing.T) {
-			if got := ValidateFormat(tt.format); got != tt.valid {
-				t.Errorf("ValidateFormat(%q) = %v, want %v", tt.format, got, tt.valid)
-			}
-		})
-	}
-}
+var _ = Describe("ValidateFormat", func() {
+	DescribeTable("validating log formats",
+		func(format string, valid bool) {
+			result := ValidateFormat(format)
+			Expect(result).To(Equal(valid), "ValidateFormat(%q) = %v, want %v", format, result, valid)
+		},
+		Entry("logfmt format", "logfmt", true),
+		Entry("json format", "json", true),
+		Entry("LOGFMT format (case insensitive)", "LOGFMT", true),
+		Entry("JSON format (case insensitive)", "JSON", true),
+		Entry("invalid format", "invalid", false),
+		Entry("empty format", "", false),
+	)
+})
 
-func TestParseLevel(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected slog.Level
-	}{
-		{"debug", slog.LevelDebug},
-		{"info", slog.LevelInfo},
-		{"warn", slog.LevelWarn},
-		{"warning", slog.LevelWarn}, // alias
-		{"error", slog.LevelError},
-		{"DEBUG", slog.LevelDebug},  // case insensitive
-		{"invalid", slog.LevelInfo}, // fallback
-		{"", slog.LevelInfo},        // fallback
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			if got := parseLevel(tt.input); got != tt.expected {
-				t.Errorf("parseLevel(%q) = %v, want %v", tt.input, got, tt.expected)
-			}
-		})
-	}
-}
+var _ = Describe("parseLevel", func() {
+	DescribeTable("parsing log levels",
+		func(input string, expected slog.Level) {
+			result := parseLevel(input)
+			Expect(result).To(Equal(expected), "parseLevel(%q) = %v, want %v", input, result, expected)
+		},
+		Entry("debug level", "debug", slog.LevelDebug),
+		Entry("info level", "info", slog.LevelInfo),
+		Entry("warn level", "warn", slog.LevelWarn),
+		Entry("warning alias", "warning", slog.LevelWarn),
+		Entry("error level", "error", slog.LevelError),
+		Entry("DEBUG level (case insensitive)", "DEBUG", slog.LevelDebug),
+		Entry("invalid level (fallback)", "invalid", slog.LevelInfo),
+		Entry("empty level (fallback)", "", slog.LevelInfo),
+	)
+})
 
 func TestComponentLoggerWithNilLogger(t *testing.T) {
 	// Create a ComponentLogger with nil internal logger

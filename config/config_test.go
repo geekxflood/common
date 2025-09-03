@@ -5,12 +5,39 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
+
+func TestConfig(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Config Suite")
+}
 
 // Test data and helper functions
 
 // createTempFile creates a temporary file with the given content and returns its path.
-func createTempFile(t *testing.T, content, suffix string) string {
+func createTempFile(t GinkgoTInterface, content, suffix string) string {
+	tmpFile, err := os.CreateTemp("", "config_test_*"+suffix)
+	Expect(err).NotTo(HaveOccurred(), "Failed to create temp file")
+
+	_, err = tmpFile.WriteString(content)
+	Expect(err).NotTo(HaveOccurred(), "Failed to write to temp file")
+
+	err = tmpFile.Close()
+	Expect(err).NotTo(HaveOccurred(), "Failed to close temp file")
+
+	// Clean up the file when the test completes
+	DeferCleanup(func() {
+		os.Remove(tmpFile.Name())
+	})
+
+	return tmpFile.Name()
+}
+
+// Legacy createTempFile for backward compatibility with existing tests
+func createTempFileT(t *testing.T, content, suffix string) string {
 	t.Helper()
 
 	tmpFile, err := os.CreateTemp("", "config_test_*"+suffix)
@@ -179,54 +206,15 @@ metrics:
   namespace: "test"
 `
 
-// TestNewManager tests the creation of a new configuration manager.
-func TestNewManager(t *testing.T) {
-	tests := []struct {
-		name        string
-		schema      string
-		config      string
-		expectError bool
-	}{
-		{
-			name:        "valid schema and config",
-			schema:      testSchema,
-			config:      testConfig,
-			expectError: false,
-		},
-		{
-			name:        "valid schema only (no config file)",
-			schema:      testSchema,
-			config:      "",
-			expectError: false,
-		},
-		{
-			name:        "invalid schema",
-			schema:      "invalid cue syntax {{{",
-			config:      testConfig,
-			expectError: true,
-		},
-		{
-			name:        "invalid config",
-			schema:      testSchema,
-			config:      invalidConfig,
-			expectError: true,
-		},
-		{
-			name:        "schema with no package declaration",
-			schema:      "server: { host: string }", // Missing package declaration
-			config:      testConfig,
-			expectError: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+var _ = Describe("NewManager", func() {
+	DescribeTable("creating a new configuration manager",
+		func(name, schema, config string, expectError bool) {
 			// Create temporary files for this test
-			schemaPath := createTempFile(t, tt.schema, ".cue")
+			schemaPath := createTempFile(GinkgoT(), schema, ".cue")
 
 			var configPath string
-			if tt.config != "" {
-				configPath = createTempFile(t, tt.config, ".yaml")
+			if config != "" {
+				configPath = createTempFile(GinkgoT(), config, ".yaml")
 			}
 
 			options := Options{
@@ -236,392 +224,229 @@ func TestNewManager(t *testing.T) {
 
 			manager, err := NewManager(options)
 
-			if tt.expectError {
-				if err == nil {
-					t.Error("Expected error but got none")
-				}
+			if expectError {
+				Expect(err).To(HaveOccurred(), "Expected error but got none")
 				return
 			}
 
-			if err != nil {
-				t.Errorf("Unexpected error: %v", err)
-				return
-			}
-
-			if manager == nil {
-				t.Error("Expected manager but got nil")
-				return
-			}
+			Expect(err).NotTo(HaveOccurred(), "Unexpected error: %v", err)
+			Expect(manager).NotTo(BeNil(), "Expected manager but got nil")
 
 			// Clean up
-			if err := manager.Close(); err != nil {
-				t.Errorf("Failed to close manager: %v", err)
-			}
+			Expect(manager.Close()).To(Succeed(), "Failed to close manager")
+		},
+		Entry("valid schema and config", "valid schema and config", testSchema, testConfig, false),
+		Entry("valid schema only (no config file)", "valid schema only", testSchema, "", false),
+		Entry("invalid schema", "invalid schema", "invalid cue syntax {{{", testConfig, true),
+		Entry("invalid config", "invalid config", testSchema, invalidConfig, true),
+		Entry("schema with no package declaration", "no package declaration", "server: { host: string }", testConfig, true),
+	)
+})
+
+var _ = Describe("Manager GetString", func() {
+	var manager Manager
+
+	BeforeEach(func() {
+		// Create manager with embedded test content
+		schemaPath := createTempFile(GinkgoT(), testSchema, ".cue")
+		configPath := createTempFile(GinkgoT(), testConfig, ".yaml")
+
+		var err error
+		manager, err = NewManager(Options{
+			SchemaPath: schemaPath,
+			ConfigPath: configPath,
 		})
-	}
-}
-
-// TestManagerGetString tests string value retrieval.
-func TestManagerGetString(t *testing.T) {
-	// Create manager with embedded test content
-	schemaPath := createTempFile(t, testSchema, ".cue")
-	configPath := createTempFile(t, testConfig, ".yaml")
-
-	manager, err := NewManager(Options{
-		SchemaPath: schemaPath,
-		ConfigPath: configPath,
+		Expect(err).NotTo(HaveOccurred(), "Failed to create manager")
 	})
-	if err != nil {
-		t.Fatalf("Failed to create manager: %v", err)
-	}
-	defer manager.Close()
 
-	tests := []struct {
-		name         string
-		path         string
-		defaultValue []string
-		expected     string
-		expectError  bool
-	}{
-		{
-			name:     "app name",
-			path:     "app.name",
-			expected: "test-application",
-		},
-		{
-			name:     "server host",
-			path:     "server.host",
-			expected: "0.0.0.0",
-		},
-		{
-			name:     "server timeout",
-			path:     "server.timeout",
-			expected: "45s",
-		},
-		{
-			name:     "database type",
-			path:     "database.type",
-			expected: "postgres",
-		},
-		{
-			name:     "logging format",
-			path:     "logging.format",
-			expected: "json",
-		},
-		{
-			name:         "non-existent path with default",
-			path:         "nonexistent.path",
-			defaultValue: []string{"default_value"},
-			expected:     "default_value",
-		},
-		{
-			name:        "non-existent path without default",
-			path:        "nonexistent.path",
-			expectError: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, err := manager.GetString(tt.path, tt.defaultValue...)
-
-			if tt.expectError {
-				if err == nil {
-					t.Error("Expected error but got none")
-				}
-				return
-			}
-
-			if err != nil {
-				t.Errorf("Unexpected error: %v", err)
-				return
-			}
-
-			if result != tt.expected {
-				t.Errorf("Expected %q but got %q", tt.expected, result)
-			}
-		})
-	}
-}
-
-// TestManagerGetInt tests integer value retrieval.
-func TestManagerGetInt(t *testing.T) {
-	// Create manager with embedded test content
-	schemaPath := createTempFile(t, testSchema, ".cue")
-	configPath := createTempFile(t, testConfig, ".yaml")
-
-	manager, err := NewManager(Options{
-		SchemaPath: schemaPath,
-		ConfigPath: configPath,
+	AfterEach(func() {
+		if manager != nil {
+			Expect(manager.Close()).To(Succeed())
+		}
 	})
-	if err != nil {
-		t.Fatalf("Failed to create manager: %v", err)
-	}
-	defer manager.Close()
 
-	tests := []struct {
-		name         string
-		path         string
-		defaultValue []int
-		expected     int
-		expectError  bool
-	}{
-		{
-			name:     "server port",
-			path:     "server.port",
-			expected: 9090,
-		},
-		{
-			name:     "database port",
-			path:     "database.port",
-			expected: 5432,
-		},
-		{
-			name:     "server max connections",
-			path:     "server.maxConnections",
-			expected: 500,
-		},
-		{
-			name:     "database pool max open",
-			path:     "database.pool.maxOpen",
-			expected: 50,
-		},
-		{
-			name:     "metrics port",
-			path:     "metrics.port",
-			expected: 9090,
-		},
-		{
-			name:         "non-existent path with default",
-			path:         "nonexistent.path",
-			defaultValue: []int{42},
-			expected:     42,
-		},
-		{
-			name:        "non-existent path without default",
-			path:        "nonexistent.path",
-			expectError: true,
-		},
-	}
+	DescribeTable("retrieving string values",
+		func(path string, defaultValue []string, expected string, expectError bool) {
+			result, err := manager.GetString(path, defaultValue...)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, err := manager.GetInt(tt.path, tt.defaultValue...)
-
-			if tt.expectError {
-				if err == nil {
-					t.Error("Expected error but got none")
-				}
+			if expectError {
+				Expect(err).To(HaveOccurred(), "Expected error but got none")
 				return
 			}
 
-			if err != nil {
-				t.Errorf("Unexpected error: %v", err)
-				return
-			}
+			Expect(err).NotTo(HaveOccurred(), "Unexpected error")
+			Expect(result).To(Equal(expected), "Expected %q but got %q", expected, result)
+		},
+		Entry("app name", "app.name", nil, "test-application", false),
+		Entry("server host", "server.host", nil, "0.0.0.0", false),
+		Entry("server timeout", "server.timeout", nil, "45s", false),
+		Entry("database type", "database.type", nil, "postgres", false),
+		Entry("logging format", "logging.format", nil, "json", false),
+		Entry("non-existent path with default", "nonexistent.path", []string{"default_value"}, "default_value", false),
+		Entry("non-existent path without default", "nonexistent.path", nil, "", true),
+	)
+})
 
-			if result != tt.expected {
-				t.Errorf("Expected %d but got %d", tt.expected, result)
-			}
+var _ = Describe("Manager GetInt", func() {
+	var manager Manager
+
+	BeforeEach(func() {
+		// Create manager with embedded test content
+		schemaPath := createTempFile(GinkgoT(), testSchema, ".cue")
+		configPath := createTempFile(GinkgoT(), testConfig, ".yaml")
+
+		var err error
+		manager, err = NewManager(Options{
+			SchemaPath: schemaPath,
+			ConfigPath: configPath,
 		})
-	}
-}
-
-// TestManagerGetBool tests boolean value retrieval.
-func TestManagerGetBool(t *testing.T) {
-	// Create manager with embedded test content
-	schemaPath := createTempFile(t, testSchema, ".cue")
-	configPath := createTempFile(t, testConfig, ".yaml")
-
-	manager, err := NewManager(Options{
-		SchemaPath: schemaPath,
-		ConfigPath: configPath,
+		Expect(err).NotTo(HaveOccurred(), "Failed to create manager")
 	})
-	if err != nil {
-		t.Fatalf("Failed to create manager: %v", err)
-	}
-	defer manager.Close()
 
-	tests := []struct {
-		name         string
-		path         string
-		defaultValue []bool
-		expected     bool
-		expectError  bool
-	}{
-		{
-			name:     "app debug enabled",
-			path:     "app.debug",
-			expected: true,
-		},
-		{
-			name:     "features auth enabled",
-			path:     "features.auth",
-			expected: true,
-		},
-		{
-			name:     "features metrics enabled",
-			path:     "features.metrics",
-			expected: true,
-		},
-		{
-			name:     "features debug enabled",
-			path:     "features.debug",
-			expected: true,
-		},
-		{
-			name:     "features experimental disabled",
-			path:     "features.experimental",
-			expected: false,
-		},
-		{
-			name:     "logging add source enabled",
-			path:     "logging.addSource",
-			expected: true,
-		},
-		{
-			name:     "metrics enabled",
-			path:     "metrics.enabled",
-			expected: true,
-		},
-		{
-			name:         "non-existent path with default",
-			path:         "nonexistent.path",
-			defaultValue: []bool{true},
-			expected:     true,
-		},
-		{
-			name:        "non-existent path without default",
-			path:        "nonexistent.path",
-			expectError: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, err := manager.GetBool(tt.path, tt.defaultValue...)
-
-			if tt.expectError {
-				if err == nil {
-					t.Error("Expected error but got none")
-				}
-				return
-			}
-
-			if err != nil {
-				t.Errorf("Unexpected error: %v", err)
-				return
-			}
-
-			if result != tt.expected {
-				t.Errorf("Expected %t but got %t", tt.expected, result)
-			}
-		})
-	}
-}
-
-// TestManagerGetDuration tests duration value retrieval.
-func TestManagerGetDuration(t *testing.T) {
-	// Create manager with embedded test content
-	schemaPath := createTempFile(t, testSchema, ".cue")
-	configPath := createTempFile(t, testConfig, ".yaml")
-
-	manager, err := NewManager(Options{
-		SchemaPath: schemaPath,
-		ConfigPath: configPath,
+	AfterEach(func() {
+		if manager != nil {
+			Expect(manager.Close()).To(Succeed())
+		}
 	})
-	if err != nil {
-		t.Fatalf("Failed to create manager: %v", err)
-	}
-	defer manager.Close()
 
-	tests := []struct {
-		name         string
-		path         string
-		defaultValue []time.Duration
-		expected     time.Duration
-		expectError  bool
-	}{
-		{
-			name:     "server timeout",
-			path:     "server.timeout",
-			expected: 45 * time.Second,
-		},
-		{
-			name:     "server read timeout",
-			path:     "server.readTimeout",
-			expected: 60 * time.Second,
-		},
-		{
-			name:     "server write timeout",
-			path:     "server.writeTimeout",
-			expected: 60 * time.Second,
-		},
-		{
-			name:     "database pool max lifetime",
-			path:     "database.pool.maxLifetime",
-			expected: 10 * time.Minute,
-		},
-		{
-			name:         "non-existent path with default",
-			path:         "nonexistent.path",
-			defaultValue: []time.Duration{30 * time.Second},
-			expected:     30 * time.Second,
-		},
-		{
-			name:        "non-existent path without default",
-			path:        "nonexistent.path",
-			expectError: true,
-		},
-	}
+	DescribeTable("retrieving integer values",
+		func(path string, defaultValue []int, expected int, expectError bool) {
+			result, err := manager.GetInt(path, defaultValue...)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, err := manager.GetDuration(tt.path, tt.defaultValue...)
-
-			if tt.expectError {
-				if err == nil {
-					t.Error("Expected error but got none")
-				}
+			if expectError {
+				Expect(err).To(HaveOccurred(), "Expected error but got none")
 				return
 			}
 
-			if err != nil {
-				t.Errorf("Unexpected error: %v", err)
-				return
-			}
+			Expect(err).NotTo(HaveOccurred(), "Unexpected error")
+			Expect(result).To(Equal(expected), "Expected %d but got %d", expected, result)
+		},
+		Entry("server port", "server.port", nil, 9090, false),
+		Entry("database port", "database.port", nil, 5432, false),
+		Entry("server max connections", "server.maxConnections", nil, 500, false),
+		Entry("database pool max open", "database.pool.maxOpen", nil, 50, false),
+		Entry("metrics port", "metrics.port", nil, 9090, false),
+		Entry("non-existent path with default", "nonexistent.path", []int{42}, 42, false),
+		Entry("non-existent path without default", "nonexistent.path", nil, 0, true),
+	)
+})
 
-			if result != tt.expected {
-				t.Errorf("Expected %v but got %v", tt.expected, result)
-			}
+var _ = Describe("Manager GetBool", func() {
+	var manager Manager
+
+	BeforeEach(func() {
+		// Create manager with embedded test content
+		schemaPath := createTempFile(GinkgoT(), testSchema, ".cue")
+		configPath := createTempFile(GinkgoT(), testConfig, ".yaml")
+
+		var err error
+		manager, err = NewManager(Options{
+			SchemaPath: schemaPath,
+			ConfigPath: configPath,
 		})
-	}
-}
+		Expect(err).NotTo(HaveOccurred(), "Failed to create manager")
+	})
 
-// TestManagerValidation tests configuration validation.
-func TestManagerValidation(t *testing.T) {
-	tests := []struct {
-		name        string
-		schema      string
-		config      string
-		expectError bool
-	}{
-		{
-			name:        "valid configuration",
-			schema:      testSchema,
-			config:      testConfig,
-			expectError: false,
+	AfterEach(func() {
+		if manager != nil {
+			Expect(manager.Close()).To(Succeed())
+		}
+	})
+
+	DescribeTable("retrieving boolean values",
+		func(path string, defaultValue []bool, expected bool, expectError bool) {
+			result, err := manager.GetBool(path, defaultValue...)
+
+			if expectError {
+				Expect(err).To(HaveOccurred(), "Expected error but got none")
+				return
+			}
+
+			Expect(err).NotTo(HaveOccurred(), "Unexpected error")
+			Expect(result).To(Equal(expected), "Expected %t but got %t", expected, result)
 		},
-		{
-			name:        "invalid configuration - bad environment",
-			schema:      testSchema,
-			config:      invalidConfig,
-			expectError: true,
+		Entry("app debug enabled", "app.debug", nil, true, false),
+		Entry("features auth enabled", "features.auth", nil, true, false),
+		Entry("features metrics enabled", "features.metrics", nil, true, false),
+		Entry("features debug enabled", "features.debug", nil, true, false),
+		Entry("features experimental disabled", "features.experimental", nil, false, false),
+		Entry("logging add source enabled", "logging.addSource", nil, true, false),
+		Entry("metrics enabled", "metrics.enabled", nil, true, false),
+		Entry("non-existent path with default", "nonexistent.path", []bool{true}, true, false),
+		Entry("non-existent path without default", "nonexistent.path", nil, false, true),
+	)
+})
+
+var _ = Describe("Manager GetDuration", func() {
+	var manager Manager
+
+	BeforeEach(func() {
+		// Create manager with embedded test content
+		schemaPath := createTempFile(GinkgoT(), testSchema, ".cue")
+		configPath := createTempFile(GinkgoT(), testConfig, ".yaml")
+
+		var err error
+		manager, err = NewManager(Options{
+			SchemaPath: schemaPath,
+			ConfigPath: configPath,
+		})
+		Expect(err).NotTo(HaveOccurred(), "Failed to create manager")
+	})
+
+	AfterEach(func() {
+		if manager != nil {
+			Expect(manager.Close()).To(Succeed())
+		}
+	})
+
+	DescribeTable("retrieving duration values",
+		func(path string, defaultValue []time.Duration, expected time.Duration, expectError bool) {
+			result, err := manager.GetDuration(path, defaultValue...)
+
+			if expectError {
+				Expect(err).To(HaveOccurred(), "Expected error but got none")
+				return
+			}
+
+			Expect(err).NotTo(HaveOccurred(), "Unexpected error")
+			Expect(result).To(Equal(expected), "Expected %v but got %v", expected, result)
 		},
-		{
-			name:   "invalid configuration - port out of range",
-			schema: testSchema,
-			config: `
+		Entry("server timeout", "server.timeout", nil, 45*time.Second, false),
+		Entry("server read timeout", "server.readTimeout", nil, 60*time.Second, false),
+		Entry("server write timeout", "server.writeTimeout", nil, 60*time.Second, false),
+		Entry("database pool max lifetime", "database.pool.maxLifetime", nil, 10*time.Minute, false),
+		Entry("non-existent path with default", "nonexistent.path", []time.Duration{30 * time.Second}, 30*time.Second, false),
+		Entry("non-existent path without default", "nonexistent.path", nil, time.Duration(0), true),
+	)
+})
+
+var _ = Describe("Manager Validation", func() {
+	DescribeTable("validating configuration",
+		func(name, schema, config string, expectError bool) {
+			schemaPath := createTempFile(GinkgoT(), schema, ".cue")
+			configPath := createTempFile(GinkgoT(), config, ".yaml")
+
+			manager, err := NewManager(Options{
+				SchemaPath: schemaPath,
+				ConfigPath: configPath,
+			})
+
+			if expectError {
+				Expect(err).To(HaveOccurred(), "Expected error during manager creation but got none")
+				return
+			}
+
+			Expect(err).NotTo(HaveOccurred(), "Unexpected error during manager creation")
+			defer func() {
+				Expect(manager.Close()).To(Succeed())
+			}()
+
+			// Test explicit validation
+			Expect(manager.Validate()).To(Succeed(), "Unexpected validation error")
+		},
+		Entry("valid configuration", "valid configuration", testSchema, testConfig, false),
+		Entry("invalid configuration - bad environment", "invalid configuration", testSchema, invalidConfig, true),
+		Entry("invalid configuration - port out of range", "port out of range", testSchema, `
 app:
   name: "test-app"
   environment: "development"
@@ -636,48 +461,15 @@ metrics:
   enabled: true
 features:
   auth: false
-`,
-			expectError: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			schemaPath := createTempFile(t, tt.schema, ".cue")
-			configPath := createTempFile(t, tt.config, ".yaml")
-
-			manager, err := NewManager(Options{
-				SchemaPath: schemaPath,
-				ConfigPath: configPath,
-			})
-
-			if tt.expectError {
-				if err == nil {
-					t.Error("Expected error during manager creation but got none")
-				}
-				return
-			}
-
-			if err != nil {
-				t.Errorf("Unexpected error during manager creation: %v", err)
-				return
-			}
-
-			defer manager.Close()
-
-			// Test explicit validation
-			if err := manager.Validate(); err != nil {
-				t.Errorf("Unexpected validation error: %v", err)
-			}
-		})
-	}
-}
+`, true),
+	)
+})
 
 // TestManagerExists tests path existence checking.
 func TestManagerExists(t *testing.T) {
 	// Create manager with embedded test content
-	schemaPath := createTempFile(t, testSchema, ".cue")
-	configPath := createTempFile(t, testConfig, ".yaml")
+	schemaPath := createTempFileT(t, testSchema, ".cue")
+	configPath := createTempFileT(t, testConfig, ".yaml")
 
 	manager, err := NewManager(Options{
 		SchemaPath: schemaPath,
@@ -754,8 +546,8 @@ func TestManagerExists(t *testing.T) {
 // TestManagerReload tests manual configuration reload functionality.
 func TestManagerReload(t *testing.T) {
 	// Create manager with embedded test content
-	schemaPath := createTempFile(t, testSchema, ".cue")
-	configPath := createTempFile(t, testConfig, ".yaml")
+	schemaPath := createTempFileT(t, testSchema, ".cue")
+	configPath := createTempFileT(t, testConfig, ".yaml")
 
 	manager, err := NewManager(Options{
 		SchemaPath: schemaPath,
@@ -893,7 +685,7 @@ app:
   debug: true
 `
 
-	configPath := createTempFile(t, configContent, ".yaml")
+	configPath := createTempFileT(t, configContent, ".yaml")
 
 	// Create manager with schema content
 	manager, err := NewManager(Options{
@@ -967,7 +759,7 @@ func TestSchemaContentValidation(t *testing.T) {
 			setupOptions: func(t *testing.T) Options {
 				return Options{
 					SchemaContent:         "server: { host: string | *\"localhost\" }",
-					ConfigPath:            createTempFile(t, "server:\n  host: \"test\"", ".yaml"),
+					ConfigPath:            createTempFileT(t, "server:\n  host: \"test\"", ".yaml"),
 					EnableConfigHotReload: true,
 				}
 			},
@@ -1028,7 +820,7 @@ func TestEnvironmentVariableSubstitution(t *testing.T) {
 		os.Unsetenv("TEST_DEBUG")
 	}()
 
-	schemaPath := createTempFile(t, testSchema, ".cue")
+	schemaPath := createTempFileT(t, testSchema, ".cue")
 
 	// Config with environment variable patterns
 	configContent := `
@@ -1042,7 +834,7 @@ logging:
   level: "info"
 `
 
-	configPath := createTempFile(t, configContent, ".yaml")
+	configPath := createTempFileT(t, configContent, ".yaml")
 
 	manager, err := NewManager(Options{
 		SchemaPath: schemaPath,
@@ -1086,7 +878,7 @@ logging:
 
 // TestGranularHotReload tests the new granular hot reload options
 func TestGranularHotReload(t *testing.T) {
-	schemaPath := createTempFile(t, testSchema, ".cue")
+	schemaPath := createTempFileT(t, testSchema, ".cue")
 	configContent := `
 server:
   host: "localhost"
@@ -1097,7 +889,7 @@ app:
 logging:
   level: "info"
 `
-	configPath := createTempFile(t, configContent, ".yaml")
+	configPath := createTempFileT(t, configContent, ".yaml")
 
 	tests := []struct {
 		name                  string

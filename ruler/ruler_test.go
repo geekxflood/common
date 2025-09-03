@@ -7,127 +7,111 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
-func TestNewRuler(t *testing.T) {
-	tests := []struct {
-		name      string
-		configObj any
-		wantErr   bool
-	}{
-		{
-			name: "valid configuration",
-			configObj: map[string]any{
-				"config": map[string]any{
-					"enabled":         true,
-					"default_message": "no rule found for contents",
-				},
-				"rules": []any{
-					map[string]any{
-						"name": "test_rule",
-						"expr": `cpu_usage > 80`,
-						"inputs": []any{
-							map[string]any{
-								"name":     "cpu_usage",
-								"type":     "number",
-								"required": true,
-							},
-						},
-						"outputs": []any{
-							map[string]any{
-								"name": "alert",
-								"fields": map[string]any{
-									"severity": map[string]any{
-										"type":     "string",
-										"required": true,
-										"default":  "high",
-									},
-									"message": map[string]any{
-										"type":     "string",
-										"required": true,
-										"default":  "CPU usage alert",
-									},
-								},
-							},
-							map[string]any{
-								"name": "notification",
-								"fields": map[string]any{
-									"type": map[string]any{
-										"type":     "string",
-										"required": true,
-										"default":  "email",
-									},
-									"recipient": map[string]any{
-										"type":     "string",
-										"required": true,
-										"default":  "admin@example.com",
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-			wantErr: false,
-		},
-		{
-			name: "empty rules",
-			configObj: map[string]any{
-				"config": map[string]any{
-					"enabled": true,
-				},
-				"rules": []any{},
-			},
-			wantErr: false,
-		},
-		{
-			name: "invalid config structure",
-			configObj: map[string]any{
-				"invalid": "structure",
-			},
-			wantErr: true,
-		},
-		{
-			name: "missing expression",
-			configObj: map[string]any{
-				"config": map[string]any{
-					"enabled": true,
-				},
-				"rules": []any{
-					map[string]any{
-						"name": "test_rule",
-						"outputs": []any{
-							map[string]any{
-								"name": "alert",
-								"fields": map[string]any{
-									"severity": map[string]any{
-										"type":     "string",
-										"required": true,
-										"default":  "high",
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ruler, err := NewRuler(tt.configObj)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("NewRuler() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if !tt.wantErr && ruler == nil {
-				t.Error("NewRuler() returned nil ruler")
-			}
-		})
-	}
+func TestRuler(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Ruler Suite")
 }
+
+var _ = Describe("NewRuler", func() {
+	DescribeTable("creating a new ruler",
+		func(name string, configObj any, wantErr bool) {
+			ruler, err := NewRuler(configObj)
+			if wantErr {
+				Expect(err).To(HaveOccurred(), "NewRuler() should return error")
+			} else {
+				Expect(err).NotTo(HaveOccurred(), "NewRuler() should not return error")
+				Expect(ruler).NotTo(BeNil(), "NewRuler() should not return nil ruler")
+			}
+		},
+		Entry("valid configuration", "valid configuration", map[string]any{
+			"config": map[string]any{
+				"enabled":         true,
+				"default_message": "no rule found for contents",
+			},
+			"rules": []any{
+				map[string]any{
+					"name": "test_rule",
+					"expr": `cpu_usage > 80`,
+					"inputs": []any{
+						map[string]any{
+							"name":     "cpu_usage",
+							"type":     "number",
+							"required": true,
+						},
+					},
+					"outputs": []any{
+						map[string]any{
+							"name": "alert",
+							"fields": map[string]any{
+								"severity": map[string]any{
+									"type":     "string",
+									"required": true,
+									"default":  "high",
+								},
+								"message": map[string]any{
+									"type":     "string",
+									"required": true,
+									"default":  "CPU usage alert",
+								},
+							},
+						},
+						map[string]any{
+							"name": "notification",
+							"fields": map[string]any{
+								"type": map[string]any{
+									"type":     "string",
+									"required": true,
+									"default":  "email",
+								},
+								"recipient": map[string]any{
+									"type":     "string",
+									"required": true,
+									"default":  "admin@example.com",
+								},
+							},
+						},
+					},
+				},
+			},
+		}, false),
+		Entry("empty rules", "empty rules", map[string]any{
+			"config": map[string]any{
+				"enabled": true,
+			},
+			"rules": []any{},
+		}, false),
+		Entry("invalid config structure", "invalid config structure", map[string]any{
+			"invalid": "structure",
+		}, true),
+		Entry("missing expression", "missing expression", map[string]any{
+			"config": map[string]any{
+				"enabled": true,
+			},
+			"rules": []any{
+				map[string]any{
+					"name": "test_rule",
+					"outputs": []any{
+						map[string]any{
+							"name": "alert",
+							"fields": map[string]any{
+								"severity": map[string]any{
+									"type":     "string",
+									"required": true,
+									"default":  "high",
+								},
+							},
+						},
+					},
+				},
+			},
+		}, true),
+	)
+})
 
 func TestRuler_Evaluate(t *testing.T) {
 	configObj := map[string]any{
