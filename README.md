@@ -2,8 +2,6 @@
 
 ![Go Version](https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go)[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A collection of reusable Go packages.
-
 ## Packages
 
 - [**config**](#package-config) - CUE-powered configuration with hot reload and environment variables
