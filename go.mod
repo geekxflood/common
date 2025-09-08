@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	cuelang.org/go v0.14.1
 	github.com/fsnotify/fsnotify v1.9.0
-	github.com/onsi/ginkgo/v2 v2.25.2
+	github.com/onsi/ginkgo/v2 v2.25.3
 	github.com/onsi/gomega v1.38.2
 )
 
