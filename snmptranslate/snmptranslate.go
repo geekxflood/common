@@ -34,12 +34,14 @@
 package snmptranslate
 
 import (
+	"bufio"
 	"container/list"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -239,6 +241,934 @@ func NewWithConfig(config Config) Translator {
 		lazyLoading:  config.LazyLoading,
 		maxCacheSize: config.MaxCacheSize,
 	}
+}
+
+// =============================================================================
+// OID Trie Constructor and Methods
+// =============================================================================
+
+// NewOIDTrie creates a new empty OID trie.
+func NewOIDTrie() *OIDTrie {
+	return &OIDTrie{
+		root: &TrieNode{
+			children: make(map[int]*TrieNode),
+			depth:    0,
+		},
+	}
+}
+
+// Insert adds an OID-to-name mapping to the trie.
+// The OID should be in dotted decimal notation (e.g., ".1.3.6.1.6.3.1.1.5.1").
+func (t *OIDTrie) Insert(oid, name string) error {
+	if oid == "" || name == "" {
+		return nil // Skip empty entries
+	}
+
+	components, err := parseOID(oid)
+	if err != nil {
+		return err
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	current := t.root
+
+	// Traverse/create the path through the trie
+	for i, component := range components {
+		if current.children == nil {
+			current.children = make(map[int]*TrieNode)
+		}
+
+		if current.children[component] == nil {
+			current.children[component] = &TrieNode{
+				children: make(map[int]*TrieNode),
+				depth:    i + 1,
+			}
+		}
+
+		current = current.children[component]
+	}
+
+	// Mark as leaf and set name
+	current.isLeaf = true
+	current.name = name
+	t.size++
+
+	return nil
+}
+
+// Lookup finds the name associated with an OID.
+// Returns empty string if the OID is not found.
+func (t *OIDTrie) Lookup(oid string) string {
+	if oid == "" {
+		return ""
+	}
+
+	components, err := parseOID(oid)
+	if err != nil {
+		return ""
+	}
+
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	current := t.root
+
+	// Traverse the trie following the OID path
+	for _, component := range components {
+		if current.children == nil {
+			return ""
+		}
+
+		next, exists := current.children[component]
+		if !exists {
+			return ""
+		}
+
+		current = next
+	}
+
+	// Return name if this is a leaf node
+	if current.isLeaf {
+		return current.name
+	}
+
+	return ""
+}
+
+// LookupPrefix finds all OIDs that start with the given prefix.
+// This is useful for finding all OIDs under a specific branch of the MIB tree.
+func (t *OIDTrie) LookupPrefix(prefix string) map[string]string {
+	if prefix == "" {
+		return make(map[string]string)
+	}
+
+	components, err := parseOID(prefix)
+	if err != nil {
+		return make(map[string]string)
+	}
+
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	current := t.root
+
+	// Navigate to the prefix node
+	for _, component := range components {
+		if current.children == nil {
+			return make(map[string]string)
+		}
+
+		next, exists := current.children[component]
+		if !exists {
+			return make(map[string]string)
+		}
+
+		current = next
+	}
+
+	// Collect all leaf nodes under this prefix
+	result := make(map[string]string)
+	t.collectLeaves(current, prefix, result)
+
+	return result
+}
+
+// collectLeaves recursively collects all leaf nodes under a given node.
+func (t *OIDTrie) collectLeaves(node *TrieNode, currentOID string, result map[string]string) {
+	if node.isLeaf {
+		result[currentOID] = node.name
+	}
+
+	if node.children != nil {
+		for component, child := range node.children {
+			childOID := currentOID + "." + strconv.Itoa(component)
+			t.collectLeaves(child, childOID, result)
+		}
+	}
+}
+
+// Size returns the number of OID entries in the trie.
+func (t *OIDTrie) Size() int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.size
+}
+
+// Clear removes all entries from the trie.
+func (t *OIDTrie) Clear() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.root = &TrieNode{
+		children: make(map[int]*TrieNode),
+		depth:    0,
+	}
+	t.size = 0
+}
+
+// GetDepthStats returns statistics about the depth distribution in the trie.
+// This is useful for understanding the structure of loaded MIBs and optimizing performance.
+func (t *OIDTrie) GetDepthStats() map[int]int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	depthCounts := make(map[int]int)
+	t.collectDepthStats(t.root, depthCounts)
+
+	return depthCounts
+}
+
+// collectDepthStats recursively collects depth statistics.
+func (t *OIDTrie) collectDepthStats(node *TrieNode, depthCounts map[int]int) {
+	if node.isLeaf {
+		depthCounts[node.depth]++
+	}
+
+	if node.children != nil {
+		for _, child := range node.children {
+			t.collectDepthStats(child, depthCounts)
+		}
+	}
+}
+
+// GetMemoryUsage estimates the memory usage of the trie in bytes.
+// This provides an approximation for monitoring and optimization purposes.
+func (t *OIDTrie) GetMemoryUsage() int64 {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	return t.calculateMemoryUsage(t.root)
+}
+
+// calculateMemoryUsage recursively calculates memory usage.
+func (t *OIDTrie) calculateMemoryUsage(node *TrieNode) int64 {
+	if node == nil {
+		return 0
+	}
+
+	// Base size of TrieNode struct
+	size := int64(64) // Approximate size of struct fields
+
+	// Add size of name string
+	size += int64(len(node.name))
+
+	// Add size of children map
+	if node.children != nil {
+		size += int64(len(node.children) * 16) // Approximate map overhead per entry
+
+		// Recursively calculate children
+		for _, child := range node.children {
+			size += t.calculateMemoryUsage(child)
+		}
+	}
+
+	return size
+}
+
+// Exists checks if an OID exists in the trie without returning the name.
+// This is more efficient than Lookup when you only need to check existence.
+func (t *OIDTrie) Exists(oid string) bool {
+	if oid == "" {
+		return false
+	}
+
+	components, err := parseOID(oid)
+	if err != nil {
+		return false
+	}
+
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	current := t.root
+
+	for _, component := range components {
+		if current.children == nil {
+			return false
+		}
+
+		next, exists := current.children[component]
+		if !exists {
+			return false
+		}
+
+		current = next
+	}
+
+	return current.isLeaf
+}
+
+// =============================================================================
+// Cache Constructor and Methods
+// =============================================================================
+
+// NewCache creates a new LRU cache with the specified capacity.
+// If capacity is 0 or negative, a default capacity of 1000 is used.
+func NewCache(capacity int) *Cache {
+	if capacity <= 0 {
+		capacity = 1000
+	}
+
+	return &Cache{
+		capacity: capacity,
+		items:    make(map[string]*list.Element),
+		lruList:  list.New(),
+		stats: CacheStats{
+			Capacity: capacity,
+		},
+	}
+}
+
+// Get retrieves a value from the cache and marks it as recently used.
+// Returns the value and true if found, empty string and false if not found.
+func (c *Cache) Get(key string) (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	element, exists := c.items[key]
+	if !exists {
+		c.stats.Misses++
+		c.updateHitRatio()
+		return "", false
+	}
+
+	// Move to front (most recently used)
+	c.lruList.MoveToFront(element)
+
+	// Update entry statistics
+	entry := element.Value.(*CacheEntry)
+	entry.timestamp = time.Now()
+	entry.hitCount++
+
+	// Update cache statistics
+	c.stats.Hits++
+	c.stats.LastAccess = entry.timestamp
+	c.updateHitRatio()
+
+	return entry.value, true
+}
+
+// Set adds or updates a key-value pair in the cache.
+// If the cache is at capacity, the least recently used item is evicted.
+func (c *Cache) Set(key, value string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Check if key already exists
+	if element, exists := c.items[key]; exists {
+		// Update existing entry
+		c.lruList.MoveToFront(element)
+		entry := element.Value.(*CacheEntry)
+		entry.value = value
+		entry.timestamp = time.Now()
+		return
+	}
+
+	// Create new entry
+	entry := &CacheEntry{
+		key:       key,
+		value:     value,
+		timestamp: time.Now(),
+		hitCount:  0,
+	}
+
+	// Add to front of list
+	element := c.lruList.PushFront(entry)
+	c.items[key] = element
+
+	// Check if we need to evict
+	if c.lruList.Len() > c.capacity {
+		c.evictLRU()
+	}
+
+	c.stats.Size = len(c.items)
+}
+
+// Delete removes a key from the cache.
+func (c *Cache) Delete(key string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	element, exists := c.items[key]
+	if !exists {
+		return false
+	}
+
+	c.lruList.Remove(element)
+	delete(c.items, key)
+	c.stats.Size = len(c.items)
+
+	return true
+}
+
+// Clear removes all entries from the cache.
+func (c *Cache) Clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.items = make(map[string]*list.Element)
+	c.lruList = list.New()
+	c.stats.Size = 0
+	c.stats.Hits = 0
+	c.stats.Misses = 0
+	c.stats.Evictions = 0
+	c.stats.HitRatio = 0
+}
+
+// Size returns the current number of items in the cache.
+func (c *Cache) Size() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.items)
+}
+
+// Capacity returns the maximum capacity of the cache.
+func (c *Cache) Capacity() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.capacity
+}
+
+// GetStats returns current cache statistics.
+func (c *Cache) GetStats() CacheStats {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	stats := c.stats
+	stats.Size = len(c.items)
+	return stats
+}
+
+// GetTopEntries returns the most frequently accessed cache entries.
+// This is useful for understanding cache usage patterns.
+func (c *Cache) GetTopEntries(limit int) []CacheEntry {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if limit <= 0 || limit > len(c.items) {
+		limit = len(c.items)
+	}
+
+	entries := make([]CacheEntry, 0, len(c.items))
+
+	// Collect all entries
+	for element := c.lruList.Front(); element != nil; element = element.Next() {
+		entry := element.Value.(*CacheEntry)
+		entries = append(entries, *entry)
+	}
+
+	// Sort by hit count (descending)
+	for i := 0; i < len(entries)-1; i++ {
+		for j := i + 1; j < len(entries); j++ {
+			if entries[i].hitCount < entries[j].hitCount {
+				entries[i], entries[j] = entries[j], entries[i]
+			}
+		}
+	}
+
+	if limit < len(entries) {
+		entries = entries[:limit]
+	}
+
+	return entries
+}
+
+// Resize changes the capacity of the cache.
+// If the new capacity is smaller than the current size, LRU entries are evicted.
+func (c *Cache) Resize(newCapacity int) {
+	if newCapacity <= 0 {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.capacity = newCapacity
+	c.stats.Capacity = newCapacity
+
+	// Evict entries if necessary
+	for c.lruList.Len() > c.capacity {
+		c.evictLRU()
+	}
+}
+
+// GetMemoryUsage estimates the memory usage of the cache in bytes.
+func (c *Cache) GetMemoryUsage() int64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	var totalSize int64
+
+	// Base overhead for maps and list
+	totalSize += int64(len(c.items) * 64)    // Approximate overhead per map entry
+	totalSize += int64(c.lruList.Len() * 48) // Approximate overhead per list element
+
+	// Calculate string storage
+	for element := c.lruList.Front(); element != nil; element = element.Next() {
+		entry := element.Value.(*CacheEntry)
+		totalSize += int64(len(entry.key) + len(entry.value))
+	}
+
+	return totalSize
+}
+
+// evictLRU removes the least recently used item from the cache.
+// Must be called with mutex locked.
+func (c *Cache) evictLRU() {
+	if c.lruList.Len() == 0 {
+		return
+	}
+
+	// Get the least recently used item (back of list)
+	element := c.lruList.Back()
+	if element == nil {
+		return
+	}
+
+	entry := element.Value.(*CacheEntry)
+
+	// Remove from both data structures
+	c.lruList.Remove(element)
+	delete(c.items, entry.key)
+
+	// Update statistics
+	c.stats.Evictions++
+	c.stats.LastEviction = time.Now()
+	c.stats.Size = len(c.items)
+}
+
+// updateHitRatio calculates and updates the cache hit ratio.
+// Must be called with mutex locked.
+func (c *Cache) updateHitRatio() {
+	total := c.stats.Hits + c.stats.Misses
+	if total > 0 {
+		c.stats.HitRatio = float64(c.stats.Hits) / float64(total)
+	} else {
+		c.stats.HitRatio = 0
+	}
+}
+
+// Warmup pre-loads the cache with frequently used OID translations.
+// This can improve performance by avoiding cache misses for common OIDs.
+func (c *Cache) Warmup(translations map[string]string) {
+	for oid, name := range translations {
+		c.Set(oid, name)
+	}
+}
+
+// GetCommonOIDTranslations returns a map of common SNMP OID translations
+// that can be used for cache warmup.
+func GetCommonOIDTranslations() map[string]string {
+	return map[string]string{
+		".1.3.6.1.6.3.1.1.5.1": "coldStart",
+		".1.3.6.1.6.3.1.1.5.2": "warmStart",
+		".1.3.6.1.6.3.1.1.5.3": "linkDown",
+		".1.3.6.1.6.3.1.1.5.4": "linkUp",
+		".1.3.6.1.6.3.1.1.5.5": "authenticationFailure",
+		".1.3.6.1.6.3.1.1.5.6": "egpNeighborLoss",
+		".1.3.6.1.2.1.1.1.0":   "sysDescr",
+		".1.3.6.1.2.1.1.2.0":   "sysObjectID",
+		".1.3.6.1.2.1.1.3.0":   "sysUpTime",
+		".1.3.6.1.2.1.1.4.0":   "sysContact",
+		".1.3.6.1.2.1.1.5.0":   "sysName",
+		".1.3.6.1.2.1.1.6.0":   "sysLocation",
+		".1.3.6.1.2.1.1.7.0":   "sysServices",
+	}
+}
+
+// =============================================================================
+// MIB Parser Constructor and Methods
+// =============================================================================
+
+// NewMIBParser creates a new MIB parser with compiled regular expressions.
+func NewMIBParser() *MIBParser {
+	return &MIBParser{
+		// Match OBJECT-TYPE definitions
+		objectTypeRegex: regexp.MustCompile(`(?i)^\s*([a-zA-Z][a-zA-Z0-9-]*)\s+OBJECT-TYPE`),
+
+		// Match NOTIFICATION-TYPE definitions
+		notificationRegex: regexp.MustCompile(`(?i)^\s*([a-zA-Z][a-zA-Z0-9-]*)\s+NOTIFICATION-TYPE`),
+
+		// Match OID assignments like: name OBJECT IDENTIFIER ::= { parent child }
+		oidAssignmentRegex: regexp.MustCompile(`(?i)^\s*([a-zA-Z][a-zA-Z0-9-]*)\s+OBJECT\s+IDENTIFIER\s*::=\s*\{\s*([^}]+)\s*\}`),
+
+		// Match MODULE-IDENTITY definitions
+		moduleIdentityRegex: regexp.MustCompile(`(?i)^\s*([a-zA-Z][a-zA-Z0-9-]*)\s+MODULE-IDENTITY`),
+
+		oidContext: make(map[string]string),
+	}
+}
+
+// ParseFile parses a single MIB file and returns extracted OID entries.
+func (p *MIBParser) ParseFile(filename string) ([]OIDEntry, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open MIB file: %w", err)
+	}
+	defer file.Close()
+
+	// First validate the file
+	if err := p.ValidateMIBFile(filename); err != nil {
+		return nil, fmt.Errorf("invalid MIB file: %w", err)
+	}
+
+	// Reset parser state
+	p.oidContext = make(map[string]string)
+	p.currentModule = ""
+
+	var entries []OIDEntry
+	scanner := bufio.NewScanner(file)
+
+	// Track multi-line constructs
+	var currentConstruct strings.Builder
+	var inConstruct bool
+	var constructName string
+	var constructType string
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+
+		// Skip empty lines and comments
+		if line == "" || strings.HasPrefix(line, "--") {
+			continue
+		}
+
+		// Handle multi-line constructs
+		if inConstruct {
+			currentConstruct.WriteString(" ")
+			currentConstruct.WriteString(line)
+
+			// Check if construct is complete (ends with closing brace or specific keywords)
+			if strings.Contains(line, "}") || strings.Contains(line, "::=") {
+				fullConstruct := currentConstruct.String()
+
+				if entry := p.parseConstruct(constructName, constructType, fullConstruct); entry != nil {
+					entries = append(entries, *entry)
+				}
+
+				// Reset state
+				inConstruct = false
+				currentConstruct.Reset()
+				constructName = ""
+				constructType = ""
+			}
+			continue
+		}
+
+		// Check for start of new constructs
+		if matches := p.objectTypeRegex.FindStringSubmatch(line); matches != nil {
+			constructName = matches[1]
+			constructType = "OBJECT-TYPE"
+			currentConstruct.WriteString(line)
+			inConstruct = true
+			continue
+		}
+
+		if matches := p.notificationRegex.FindStringSubmatch(line); matches != nil {
+			constructName = matches[1]
+			constructType = "NOTIFICATION-TYPE"
+			currentConstruct.WriteString(line)
+			inConstruct = true
+			continue
+		}
+
+		if matches := p.moduleIdentityRegex.FindStringSubmatch(line); matches != nil {
+			p.currentModule = matches[1]
+			constructName = matches[1]
+			constructType = "MODULE-IDENTITY"
+			currentConstruct.WriteString(line)
+			inConstruct = true
+			continue
+		}
+
+		// Handle simple OID assignments on single lines
+		if matches := p.oidAssignmentRegex.FindStringSubmatch(line); matches != nil {
+			name := matches[1]
+			oidPart := matches[2]
+
+			if oid := p.parseOIDAssignment(oidPart); oid != "" {
+				entries = append(entries, OIDEntry{
+					OID:    oid,
+					Name:   name,
+					Type:   "OBJECT IDENTIFIER",
+					Module: p.currentModule,
+				})
+
+				// Store in context for future references
+				p.oidContext[name] = oid
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("error reading MIB file: %w", err)
+	}
+
+	return entries, nil
+}
+
+// parseConstruct parses a complete MIB construct and extracts OID information.
+func (p *MIBParser) parseConstruct(name, constructType, content string) *OIDEntry {
+	// Look for OID assignment within the construct
+	oidRegex := regexp.MustCompile(`::=\s*\{\s*([^}]+)\s*\}`)
+	matches := oidRegex.FindStringSubmatch(content)
+
+	if matches == nil {
+		return nil
+	}
+
+	oidPart := matches[1]
+	oid := p.parseOIDAssignment(oidPart)
+
+	if oid == "" {
+		return nil
+	}
+
+	entry := &OIDEntry{
+		OID:    oid,
+		Name:   name,
+		Type:   constructType,
+		Module: p.currentModule,
+	}
+
+	// Extract description if present
+	if desc := p.extractDescription(content); desc != "" {
+		entry.Description = desc
+	}
+
+	// Store in context for future references
+	p.oidContext[name] = oid
+
+	return entry
+}
+
+// parseOIDAssignment parses an OID assignment like "{ iso org(3) dod(6) internet(1) mgmt(2) mib-2(1) system(1) sysDescr(1) }"
+func (p *MIBParser) parseOIDAssignment(oidPart string) string {
+	// Clean up the OID part
+	oidPart = strings.TrimSpace(oidPart)
+
+	// Handle different OID formats
+	var components []string
+
+	// Split by whitespace and parse each component
+	parts := strings.Fields(oidPart)
+
+	for _, part := range parts {
+		// Remove parentheses and extract numeric values
+		part = strings.TrimSpace(part)
+
+		// Handle formats like "iso", "org(3)", "3", etc.
+		if strings.Contains(part, "(") && strings.Contains(part, ")") {
+			// Extract number from parentheses
+			numRegex := regexp.MustCompile(`\((\d+)\)`)
+			if numMatches := numRegex.FindStringSubmatch(part); numMatches != nil {
+				components = append(components, numMatches[1])
+			}
+		} else if num, err := strconv.Atoi(part); err == nil {
+			// Direct numeric value
+			components = append(components, strconv.Itoa(num))
+		} else {
+			// Try to resolve symbolic name
+			if resolvedOID, exists := p.oidContext[part]; exists {
+				// If it's a complete OID, use it as base
+				if strings.HasPrefix(resolvedOID, ".") {
+					return resolvedOID
+				}
+				components = append(components, resolvedOID)
+			} else {
+				// Handle well-known symbolic names
+				if knownOID := p.resolveWellKnownName(part); knownOID != "" {
+					components = append(components, knownOID)
+				}
+			}
+		}
+	}
+
+	if len(components) == 0 {
+		return ""
+	}
+
+	// Join components to form complete OID
+	return "." + strings.Join(components, ".")
+}
+
+// resolveWellKnownName resolves common symbolic names to their numeric OID components.
+func (p *MIBParser) resolveWellKnownName(name string) string {
+	wellKnownNames := map[string]string{
+		"iso":          "1",
+		"org":          "3",
+		"dod":          "6",
+		"internet":     "1",
+		"directory":    "1",
+		"mgmt":         "2",
+		"mib-2":        "1",
+		"experimental": "3",
+		"private":      "4",
+		"enterprises":  "1",
+		"security":     "5",
+		"snmpV2":       "6",
+		"system":       "1",
+		"interfaces":   "2",
+		"at":           "3",
+		"ip":           "4",
+		"icmp":         "5",
+		"tcp":          "6",
+		"udp":          "7",
+		"egp":          "8",
+		"transmission": "10",
+		"snmp":         "11",
+	}
+
+	if oid, exists := wellKnownNames[strings.ToLower(name)]; exists {
+		return oid
+	}
+
+	return ""
+}
+
+// extractDescription extracts the DESCRIPTION field from a MIB construct.
+func (p *MIBParser) extractDescription(content string) string {
+	descRegex := regexp.MustCompile(`(?i)DESCRIPTION\s*"([^"]*)"`)
+	matches := descRegex.FindStringSubmatch(content)
+
+	if len(matches) > 1 {
+		return strings.TrimSpace(matches[1])
+	}
+
+	return ""
+}
+
+// ParseDirectory parses all MIB files in a directory.
+func (p *MIBParser) ParseDirectory(dirPath string) ([]OIDEntry, error) {
+	var allEntries []OIDEntry
+
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		filename := entry.Name()
+		if !isMIBFile(filename) {
+			continue
+		}
+
+		fullPath := dirPath + "/" + filename
+		fileEntries, err := p.ParseFile(fullPath)
+		if err != nil {
+			// Log error but continue with other files
+			fmt.Printf("Warning: failed to parse MIB file %s: %v\n", fullPath, err)
+			continue
+		}
+
+		allEntries = append(allEntries, fileEntries...)
+	}
+
+	return allEntries, nil
+}
+
+// ValidateMIBFile performs basic validation on a MIB file.
+func (p *MIBParser) ValidateMIBFile(filename string) error {
+	file, err := os.Open(filename)
+	if err != nil {
+		return fmt.Errorf("cannot open file: %w", err)
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	lineCount := 0
+	hasModuleIdentity := false
+	hasDefinitions := false
+
+	for scanner.Scan() {
+		lineCount++
+		line := strings.TrimSpace(scanner.Text())
+
+		if line == "" || strings.HasPrefix(line, "--") {
+			continue
+		}
+
+		if p.moduleIdentityRegex.MatchString(line) {
+			hasModuleIdentity = true
+		}
+
+		if p.objectTypeRegex.MatchString(line) || p.notificationRegex.MatchString(line) {
+			hasDefinitions = true
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("error reading file: %w", err)
+	}
+
+	if lineCount == 0 {
+		return fmt.Errorf("file is empty")
+	}
+
+	if !hasModuleIdentity && !hasDefinitions {
+		return fmt.Errorf("file does not appear to be a valid MIB file")
+	}
+
+	return nil
+}
+
+// =============================================================================
+// Helper Functions
+// =============================================================================
+
+// parseOID converts an OID string to a slice of integer components.
+// Handles both formats: "1.3.6.1" and ".1.3.6.1"
+func parseOID(oid string) ([]int, error) {
+	// Remove leading dot if present
+	if strings.HasPrefix(oid, ".") {
+		oid = oid[1:]
+	}
+
+	if oid == "" {
+		return []int{}, nil
+	}
+
+	parts := strings.Split(oid, ".")
+	components := make([]int, len(parts))
+
+	for i, part := range parts {
+		if part == "" {
+			continue // Skip empty parts from double dots
+		}
+
+		num, err := strconv.Atoi(part)
+		if err != nil {
+			return nil, err
+		}
+
+		if num < 0 {
+			return nil, strconv.ErrRange
+		}
+
+		components[i] = num
+	}
+
+	return components, nil
+}
+
+// formatOID converts integer components back to OID string format.
+func formatOID(components []int) string {
+	if len(components) == 0 {
+		return ""
+	}
+
+	parts := make([]string, len(components))
+	for i, component := range components {
+		parts[i] = strconv.Itoa(component)
+	}
+
+	return "." + strings.Join(parts, ".")
 }
 
 // Init initializes the translator with MIB files from the specified directory.
