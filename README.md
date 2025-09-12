@@ -7,6 +7,7 @@
 - [**config**](#package-config) - CUE-powered configuration with hot reload and environment variables
 - [**logging**](#package-logging) - Structured logging with context support
 - [**ruler**](#package-ruler) - CUE expression evaluation with intelligent rule selection
+- [**trapprocessor**](#package-trapprocessor) - SNMP trap processing with template engine and worker pools
 
 ## Installation
 
@@ -14,6 +15,7 @@
 go get github.com/geekxflood/common/config
 go get github.com/geekxflood/common/logging
 go get github.com/geekxflood/common/ruler
+go get github.com/geekxflood/common/trapprocessor
 ```
 
 ## Package `config`
@@ -194,6 +196,62 @@ func main() {
     if result.Output != nil {
         log.Printf("Rule matched: %s", result.MatchedRule.Name)
     }
+}
+```
+
+## Package `trapprocessor`
+
+A package for consolidated SNMP trap processing with template engine and core utilities.
+
+### Features
+
+✅ **SNMP Trap Processing** - Complete SNMP trap listening, parsing, and processing
+✅ **Template Engine** - Built-in template processing for trap formatting
+✅ **Worker Pool** - Configurable worker pool for concurrent trap processing
+✅ **Multiple SNMP Versions** - Support for SNMPv1, SNMPv2c, and SNMPv3
+✅ **Flexible Configuration** - Map-based configuration with sensible defaults
+✅ **Production Ready** - Thread-safe operations with comprehensive error handling
+
+### Quick Start
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+    "github.com/geekxflood/common/trapprocessor"
+)
+
+func main() {
+    // Create configuration
+    config := map[string]any{
+        "snmp": map[string]any{
+            "port":         1162,
+            "bind_address": "0.0.0.0",
+            "community":    "public",
+            "version":      "2c",
+        },
+        "worker_pool": map[string]any{
+            "enabled": true,
+            "size":    10,
+        },
+    }
+
+    // Create and start trap processor
+    processor, err := trapprocessor.New(config)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    ctx := context.Background()
+    if err := processor.Start(ctx); err != nil {
+        log.Fatal(err)
+    }
+    defer processor.Stop()
+
+    log.Println("SNMP trap processor started")
+    // Process traps...
 }
 ```
 
