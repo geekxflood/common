@@ -7,6 +7,7 @@
 - [**config**](#package-config) - CUE-powered configuration with hot reload and environment variables
 - [**logging**](#package-logging) - Structured logging with context support
 - [**ruler**](#package-ruler) - CUE expression evaluation with intelligent rule selection
+- [**snmptranslate**](#package-snmptranslate) - MIB-based OID translation for SNMP operations
 - [**trapprocessor**](#package-trapprocessor) - SNMP trap processing with template engine and worker pools
 
 ## Installation
@@ -15,6 +16,7 @@
 go get github.com/geekxflood/common/config
 go get github.com/geekxflood/common/logging
 go get github.com/geekxflood/common/ruler
+go get github.com/geekxflood/common/snmptranslate
 go get github.com/geekxflood/common/trapprocessor
 ```
 
@@ -195,6 +197,65 @@ func main() {
 
     if result.Output != nil {
         log.Printf("Rule matched: %s", result.MatchedRule.Name)
+    }
+}
+```
+
+## Package `snmptranslate`
+
+A package for MIB-based OID translation functionality that provides efficient, scalable SNMP OID-to-name translation.
+
+### Features
+
+✅ **MIB File Processing** - Parse and load MIB files from directories to build OID-to-name mappings
+✅ **Efficient Data Structures** - Trie-based OID storage for O(log n) lookup performance
+✅ **Lazy Loading** - Load MIB files on-demand to reduce startup time and memory usage
+✅ **LRU Caching** - Intelligent caching of frequently accessed translations
+✅ **Batch Operations** - Process multiple OIDs efficiently in single operations
+✅ **Thread-Safe** - Concurrent access support with optimized locking
+
+### Quick Start
+
+```go
+package main
+
+import (
+    "log"
+    "github.com/geekxflood/common/snmptranslate"
+)
+
+func main() {
+    // Create translator with default configuration
+    translator := snmptranslate.New()
+
+    // Initialize with MIB directory
+    if err := translator.Init("/usr/share/snmp/mibs"); err != nil {
+        log.Fatal(err)
+    }
+    defer translator.Close()
+
+    // Translate single OID
+    name, err := translator.Translate(".1.3.6.1.6.3.1.1.5.1")
+    if err != nil {
+        log.Printf("Translation failed: %v", err)
+    } else {
+        log.Printf("OID translates to: %s", name) // "coldStart"
+    }
+
+    // Batch translation
+    oids := []string{
+        ".1.3.6.1.6.3.1.1.5.1",
+        ".1.3.6.1.6.3.1.1.5.2",
+        ".1.3.6.1.6.3.1.1.5.3",
+    }
+
+    results, err := translator.TranslateBatch(oids)
+    if err != nil {
+        log.Printf("Batch translation errors: %v", err)
+    }
+
+    for oid, name := range results {
+        log.Printf("%s -> %s", oid, name)
     }
 }
 ```

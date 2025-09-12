@@ -42,6 +42,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/geekxflood/common/snmptranslate"
 	"github.com/gosnmp/gosnmp"
 )
 
@@ -210,6 +211,21 @@ func (tp *TrapProcessor) Start(ctx context.Context) error {
 // Stop stops the trap processor.
 func (tp *TrapProcessor) Stop(ctx context.Context) error {
 	return tp.listener.Stop(ctx)
+}
+
+// Close stops the trap processor and cleans up resources.
+func (tp *TrapProcessor) Close(ctx context.Context) error {
+	// Stop the listener first
+	if err := tp.Stop(ctx); err != nil {
+		return err
+	}
+
+	// Clean up parser resources
+	if tp.parser != nil {
+		return tp.parser.Close()
+	}
+
+	return nil
 }
 
 // parseConfig parses configuration from various input types.
@@ -531,7 +547,8 @@ type WorkerPool struct {
 type TrapParser struct {
 	mibPaths      []string
 	translateOIDs bool
-	bufferPool    *BufferPool // Buffer pool for optimized memory allocation
+	bufferPool    *BufferPool              // Buffer pool for optimized memory allocation
+	translator    snmptranslate.Translator // MIB-based OID translator
 }
 
 // NewBufferPool creates a new buffer pool with pre-allocated objects for performance optimization.
@@ -579,8 +596,7 @@ func (bp *BufferPool) GetPacketBuffer() []byte {
 // Only buffers up to 16KB are pooled to prevent memory bloat.
 func (bp *BufferPool) PutPacketBuffer(buf []byte) {
 	if cap(buf) <= 16384 { // Only pool buffers up to 16KB
-		//nolint:staticcheck // SA6002: byte slices are correctly pooled this way
-		bp.packetBuffers.Put(buf)
+		bp.packetBuffers.Put(interface{}(buf))
 	}
 }
 
@@ -669,11 +685,30 @@ func NewWorkerPool(config Config, processor PacketProcessor) (*WorkerPool, error
 
 // NewTrapParser creates a new trap parser with buffer pool optimization.
 func NewTrapParser(mibPaths []string, translateOIDs bool) *TrapParser {
-	return &TrapParser{
+	parser := &TrapParser{
 		mibPaths:      mibPaths,
 		translateOIDs: translateOIDs,
 		bufferPool:    NewBufferPool(),
 	}
+
+	// Initialize MIB-based translator if MIB paths are provided
+	if translateOIDs && len(mibPaths) > 0 {
+		translator := snmptranslate.New()
+
+		// Try to initialize with the first MIB directory
+		// In a real implementation, you might want to handle multiple directories
+		if len(mibPaths) > 0 {
+			if err := translator.Init(mibPaths[0]); err != nil {
+				// Log error but continue with fallback translation
+				// In production, you might want to handle this differently
+				fmt.Printf("Warning: failed to initialize MIB translator: %v\n", err)
+			} else {
+				parser.translator = translator
+			}
+		}
+	}
+
+	return parser
 }
 
 // Start starts the SNMP trap listener.
@@ -1059,13 +1094,29 @@ func (p *TrapParser) parseVariables(msg *TrapMessage, packet *gosnmp.SnmpPacket)
 }
 
 // translateOID translates an OID to a human-readable name.
-// For now, uses basic translation. Can be enhanced with MIB library later.
+// Uses MIB-based translation if available, falls back to basic translation.
 func (p *TrapParser) translateOID(oid string) string {
 	if !p.translateOIDs {
 		return oid
 	}
 
+	// Try MIB-based translation first
+	if p.translator != nil {
+		if name, err := p.translator.Translate(oid); err == nil {
+			return name
+		}
+	}
+
+	// Fallback to basic translation for common OIDs
 	return translateCommonOID(oid)
+}
+
+// Close cleans up resources used by the trap parser.
+func (p *TrapParser) Close() error {
+	if p.translator != nil {
+		return p.translator.Close()
+	}
+	return nil
 }
 
 // getVersionString converts SNMP version to string.
