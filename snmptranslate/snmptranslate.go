@@ -36,6 +36,7 @@ package snmptranslate
 import (
 	"bufio"
 	"container/list"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -538,7 +539,12 @@ func (c *Cache) Get(key string) (string, bool) {
 	c.lruList.MoveToFront(element)
 
 	// Update entry statistics
-	entry := element.Value.(*CacheEntry)
+	entry, ok := element.Value.(*CacheEntry)
+	if !ok {
+		c.stats.Misses++
+		c.updateHitRatio()
+		return "", false
+	}
 	entry.timestamp = time.Now()
 	entry.hitCount++
 
@@ -560,7 +566,10 @@ func (c *Cache) Set(key, value string) {
 	if element, exists := c.items[key]; exists {
 		// Update existing entry
 		c.lruList.MoveToFront(element)
-		entry := element.Value.(*CacheEntry)
+		entry, ok := element.Value.(*CacheEntry)
+		if !ok {
+			return
+		}
 		entry.value = value
 		entry.timestamp = time.Now()
 		return
@@ -655,7 +664,10 @@ func (c *Cache) GetTopEntries(limit int) []CacheEntry {
 
 	// Collect all entries
 	for element := c.lruList.Front(); element != nil; element = element.Next() {
-		entry := element.Value.(*CacheEntry)
+		entry, ok := element.Value.(*CacheEntry)
+		if !ok {
+			continue
+		}
 		entries = append(entries, *entry)
 	}
 
@@ -707,7 +719,10 @@ func (c *Cache) GetMemoryUsage() int64 {
 
 	// Calculate string storage
 	for element := c.lruList.Front(); element != nil; element = element.Next() {
-		entry := element.Value.(*CacheEntry)
+		entry, ok := element.Value.(*CacheEntry)
+		if !ok {
+			continue
+		}
 		totalSize += int64(len(entry.key) + len(entry.value))
 	}
 
@@ -727,7 +742,10 @@ func (c *Cache) evictLRU() {
 		return
 	}
 
-	entry := element.Value.(*CacheEntry)
+	entry, ok := element.Value.(*CacheEntry)
+	if !ok {
+		return
+	}
 
 	// Remove from both data structures
 	c.lruList.Remove(element)
@@ -803,29 +821,53 @@ func NewMIBParser() *MIBParser {
 
 // ParseFile parses a single MIB file and returns extracted OID entries.
 func (p *MIBParser) ParseFile(filename string) ([]OIDEntry, error) {
+	file, err := p.openAndValidateFile(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		file.Close()
+	}()
+
+	// Reset parser state
+	p.resetParserState()
+
+	return p.parseFileContent(file)
+}
+
+// openAndValidateFile opens and validates a MIB file.
+func (p *MIBParser) openAndValidateFile(filename string) (*os.File, error) {
 	file, err := os.Open(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open MIB file: %w", err)
 	}
-	defer file.Close()
 
 	// First validate the file
 	if err := p.ValidateMIBFile(filename); err != nil {
+		if closeErr := file.Close(); closeErr != nil {
+			return nil, fmt.Errorf("invalid MIB file: %w", err)
+		}
 		return nil, fmt.Errorf("invalid MIB file: %w", err)
 	}
 
-	// Reset parser state
+	return file, nil
+}
+
+// resetParserState resets the parser state for a new file.
+func (p *MIBParser) resetParserState() {
 	p.oidContext = make(map[string]string)
 	p.currentModule = ""
+}
 
+// parseFileContent parses the content of an opened MIB file.
+func (p *MIBParser) parseFileContent(file *os.File) ([]OIDEntry, error) {
 	var entries []OIDEntry
 	scanner := bufio.NewScanner(file)
 
 	// Track multi-line constructs
-	var currentConstruct strings.Builder
-	var inConstruct bool
-	var constructName string
-	var constructType string
+	constructState := &constructParseState{
+		currentConstruct: strings.Builder{},
+	}
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -835,70 +877,8 @@ func (p *MIBParser) ParseFile(filename string) ([]OIDEntry, error) {
 			continue
 		}
 
-		// Handle multi-line constructs
-		if inConstruct {
-			currentConstruct.WriteString(" ")
-			currentConstruct.WriteString(line)
-
-			// Check if construct is complete (ends with closing brace or specific keywords)
-			if strings.Contains(line, "}") || strings.Contains(line, "::=") {
-				fullConstruct := currentConstruct.String()
-
-				if entry := p.parseConstruct(constructName, constructType, fullConstruct); entry != nil {
-					entries = append(entries, *entry)
-				}
-
-				// Reset state
-				inConstruct = false
-				currentConstruct.Reset()
-				constructName = ""
-				constructType = ""
-			}
-			continue
-		}
-
-		// Check for start of new constructs
-		if matches := p.objectTypeRegex.FindStringSubmatch(line); matches != nil {
-			constructName = matches[1]
-			constructType = "OBJECT-TYPE"
-			currentConstruct.WriteString(line)
-			inConstruct = true
-			continue
-		}
-
-		if matches := p.notificationRegex.FindStringSubmatch(line); matches != nil {
-			constructName = matches[1]
-			constructType = "NOTIFICATION-TYPE"
-			currentConstruct.WriteString(line)
-			inConstruct = true
-			continue
-		}
-
-		if matches := p.moduleIdentityRegex.FindStringSubmatch(line); matches != nil {
-			p.currentModule = matches[1]
-			constructName = matches[1]
-			constructType = "MODULE-IDENTITY"
-			currentConstruct.WriteString(line)
-			inConstruct = true
-			continue
-		}
-
-		// Handle simple OID assignments on single lines
-		if matches := p.oidAssignmentRegex.FindStringSubmatch(line); matches != nil {
-			name := matches[1]
-			oidPart := matches[2]
-
-			if oid := p.parseOIDAssignment(oidPart); oid != "" {
-				entries = append(entries, OIDEntry{
-					OID:    oid,
-					Name:   name,
-					Type:   "OBJECT IDENTIFIER",
-					Module: p.currentModule,
-				})
-
-				// Store in context for future references
-				p.oidContext[name] = oid
-			}
+		if newEntries := p.processLine(line, constructState); newEntries != nil {
+			entries = append(entries, newEntries...)
 		}
 	}
 
@@ -907,6 +887,107 @@ func (p *MIBParser) ParseFile(filename string) ([]OIDEntry, error) {
 	}
 
 	return entries, nil
+}
+
+// constructParseState holds state for parsing multi-line constructs.
+type constructParseState struct {
+	currentConstruct strings.Builder
+	inConstruct      bool
+	constructName    string
+	constructType    string
+}
+
+// processLine processes a single line and returns any extracted entries.
+func (p *MIBParser) processLine(line string, state *constructParseState) []OIDEntry {
+	// Handle multi-line constructs
+	if state.inConstruct {
+		return p.handleMultiLineConstruct(line, state)
+	}
+
+	// Check for start of new constructs
+	return p.handleNewConstruct(line, state)
+}
+
+// handleMultiLineConstruct handles lines within a multi-line construct.
+func (p *MIBParser) handleMultiLineConstruct(line string, state *constructParseState) []OIDEntry {
+	state.currentConstruct.WriteString(" ")
+	state.currentConstruct.WriteString(line)
+
+	// Check if construct is complete
+	if strings.Contains(line, "}") || strings.Contains(line, "::=") {
+		fullConstruct := state.currentConstruct.String()
+
+		var entries []OIDEntry
+		if entry := p.parseConstruct(state.constructName, state.constructType, fullConstruct); entry != nil {
+			entries = append(entries, *entry)
+		}
+
+		// Reset state
+		state.inConstruct = false
+		state.currentConstruct.Reset()
+		state.constructName = ""
+		state.constructType = ""
+
+		return entries
+	}
+
+	return nil
+}
+
+// handleNewConstruct handles the start of new constructs and simple assignments.
+func (p *MIBParser) handleNewConstruct(line string, state *constructParseState) []OIDEntry {
+	// Check for start of new constructs
+	if matches := p.objectTypeRegex.FindStringSubmatch(line); matches != nil {
+		state.constructName = matches[1]
+		state.constructType = "OBJECT-TYPE"
+		state.currentConstruct.WriteString(line)
+		state.inConstruct = true
+		return nil
+	}
+
+	if matches := p.notificationRegex.FindStringSubmatch(line); matches != nil {
+		state.constructName = matches[1]
+		state.constructType = "NOTIFICATION-TYPE"
+		state.currentConstruct.WriteString(line)
+		state.inConstruct = true
+		return nil
+	}
+
+	if matches := p.moduleIdentityRegex.FindStringSubmatch(line); matches != nil {
+		p.currentModule = matches[1]
+		state.constructName = matches[1]
+		state.constructType = "MODULE-IDENTITY"
+		state.currentConstruct.WriteString(line)
+		state.inConstruct = true
+		return nil
+	}
+
+	// Handle simple OID assignments on single lines
+	return p.handleSimpleOIDAssignment(line)
+}
+
+// handleSimpleOIDAssignment handles simple OID assignments on single lines.
+func (p *MIBParser) handleSimpleOIDAssignment(line string) []OIDEntry {
+	if matches := p.oidAssignmentRegex.FindStringSubmatch(line); matches != nil {
+		name := matches[1]
+		oidPart := matches[2]
+
+		if oid := p.parseOIDAssignment(oidPart); oid != "" {
+			entry := OIDEntry{
+				OID:    oid,
+				Name:   name,
+				Type:   "OBJECT IDENTIFIER",
+				Module: p.currentModule,
+			}
+
+			// Store in context for future references
+			p.oidContext[name] = oid
+
+			return []OIDEntry{entry}
+		}
+	}
+
+	return nil
 }
 
 // parseConstruct parses a complete MIB construct and extracts OID information.
@@ -956,33 +1037,9 @@ func (p *MIBParser) parseOIDAssignment(oidPart string) string {
 	parts := strings.Fields(oidPart)
 
 	for _, part := range parts {
-		// Remove parentheses and extract numeric values
 		part = strings.TrimSpace(part)
-
-		// Handle formats like "iso", "org(3)", "3", etc.
-		if strings.Contains(part, "(") && strings.Contains(part, ")") {
-			// Extract number from parentheses
-			numRegex := regexp.MustCompile(`\((\d+)\)`)
-			if numMatches := numRegex.FindStringSubmatch(part); numMatches != nil {
-				components = append(components, numMatches[1])
-			}
-		} else if num, err := strconv.Atoi(part); err == nil {
-			// Direct numeric value
-			components = append(components, strconv.Itoa(num))
-		} else {
-			// Try to resolve symbolic name
-			if resolvedOID, exists := p.oidContext[part]; exists {
-				// If it's a complete OID, use it as base
-				if strings.HasPrefix(resolvedOID, ".") {
-					return resolvedOID
-				}
-				components = append(components, resolvedOID)
-			} else {
-				// Handle well-known symbolic names
-				if knownOID := p.resolveWellKnownName(part); knownOID != "" {
-					components = append(components, knownOID)
-				}
-			}
+		if component := p.parseOIDComponent(part); component != "" {
+			components = append(components, component)
 		}
 	}
 
@@ -992,6 +1049,36 @@ func (p *MIBParser) parseOIDAssignment(oidPart string) string {
 
 	// Join components to form complete OID
 	return "." + strings.Join(components, ".")
+}
+
+// parseOIDComponent parses a single OID component and returns its numeric value.
+func (p *MIBParser) parseOIDComponent(part string) string {
+	// Handle formats like "iso", "org(3)", "3", etc.
+	if strings.Contains(part, "(") && strings.Contains(part, ")") {
+		// Extract number from parentheses
+		numRegex := regexp.MustCompile(`\((\d+)\)`)
+		if numMatches := numRegex.FindStringSubmatch(part); numMatches != nil {
+			return numMatches[1]
+		}
+		return ""
+	}
+
+	if num, err := strconv.Atoi(part); err == nil {
+		// Direct numeric value
+		return strconv.Itoa(num)
+	}
+
+	// Try to resolve symbolic name
+	if resolvedOID, exists := p.oidContext[part]; exists {
+		// If it's a complete OID, use it as base
+		if strings.HasPrefix(resolvedOID, ".") {
+			return resolvedOID
+		}
+		return resolvedOID
+	}
+
+	// Handle well-known symbolic names
+	return p.resolveWellKnownName(part)
 }
 
 // resolveWellKnownName resolves common symbolic names to their numeric OID components.
@@ -1079,7 +1166,9 @@ func (p *MIBParser) ValidateMIBFile(filename string) error {
 	if err != nil {
 		return fmt.Errorf("cannot open file: %w", err)
 	}
-	defer file.Close()
+	defer func() {
+		file.Close()
+	}()
 
 	scanner := bufio.NewScanner(file)
 	lineCount := 0
@@ -1108,11 +1197,11 @@ func (p *MIBParser) ValidateMIBFile(filename string) error {
 	}
 
 	if lineCount == 0 {
-		return fmt.Errorf("file is empty")
+		return errors.New("file is empty")
 	}
 
 	if !hasModuleIdentity && !hasDefinitions {
-		return fmt.Errorf("file does not appear to be a valid MIB file")
+		return errors.New("file does not appear to be a valid MIB file")
 	}
 
 	return nil
@@ -1126,9 +1215,7 @@ func (p *MIBParser) ValidateMIBFile(filename string) error {
 // Handles both formats: "1.3.6.1" and ".1.3.6.1"
 func parseOID(oid string) ([]int, error) {
 	// Remove leading dot if present
-	if strings.HasPrefix(oid, ".") {
-		oid = oid[1:]
-	}
+	oid = strings.TrimPrefix(oid, ".")
 
 	if oid == "" {
 		return []int{}, nil
@@ -1157,27 +1244,13 @@ func parseOID(oid string) ([]int, error) {
 	return components, nil
 }
 
-// formatOID converts integer components back to OID string format.
-func formatOID(components []int) string {
-	if len(components) == 0 {
-		return ""
-	}
-
-	parts := make([]string, len(components))
-	for i, component := range components {
-		parts[i] = strconv.Itoa(component)
-	}
-
-	return "." + strings.Join(parts, ".")
-}
-
 // Init initializes the translator with MIB files from the specified directory.
 func (t *translator) Init(mibDir string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	if t.initialized {
-		return fmt.Errorf("translator already initialized")
+		return errors.New("translator already initialized")
 	}
 
 	// Validate MIB directory
@@ -1200,7 +1273,7 @@ func (t *translator) Init(mibDir string) error {
 // Translate converts an OID string to its human-readable name.
 func (t *translator) Translate(oid string) (string, error) {
 	if !t.initialized {
-		return "", fmt.Errorf("translator not initialized")
+		return "", errors.New("translator not initialized")
 	}
 
 	start := time.Now()
@@ -1260,7 +1333,7 @@ func (t *translator) Translate(oid string) (string, error) {
 // TranslateBatch translates multiple OIDs efficiently.
 func (t *translator) TranslateBatch(oids []string) (map[string]string, error) {
 	if !t.initialized {
-		return nil, fmt.Errorf("translator not initialized")
+		return nil, errors.New("translator not initialized")
 	}
 
 	result := make(map[string]string, len(oids))
@@ -1299,7 +1372,10 @@ func (t *translator) LoadMIB(filename string) error {
 
 	// Add entries to trie
 	for _, entry := range entries {
-		t.trie.Insert(entry.OID, entry.Name)
+		if err := t.trie.Insert(entry.OID, entry.Name); err != nil {
+			// Log error but continue with other entries
+			continue
+		}
 	}
 
 	t.loadedMIBs[filename] = true
@@ -1360,7 +1436,10 @@ func (t *translator) loadMIBFile(filename string) error {
 	}
 
 	for _, entry := range entries {
-		t.trie.Insert(entry.OID, entry.Name)
+		if err := t.trie.Insert(entry.OID, entry.Name); err != nil {
+			// Log error but continue with other entries
+			continue
+		}
 	}
 
 	t.loadedMIBs[filename] = true

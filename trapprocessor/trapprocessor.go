@@ -584,19 +584,22 @@ func NewBufferPool() *BufferPool {
 
 // GetPacketBuffer returns a reusable packet buffer from the pool.
 func (bp *BufferPool) GetPacketBuffer() []byte {
-	buf, ok := bp.packetBuffers.Get().([]byte)
-	if !ok {
-		// Fallback to creating a new buffer if type assertion fails
-		return make([]byte, 0, 8192)
+	if buf := bp.packetBuffers.Get(); buf != nil {
+		if slice, ok := buf.([]byte); ok {
+			return slice[:0] // Reset length but keep capacity
+		}
 	}
-	return buf[:0] // Reset length to 0
+	// Fallback to creating a new buffer if pool is empty or type assertion fails
+	return make([]byte, 0, 8192)
 }
 
 // PutPacketBuffer returns a packet buffer to the pool for reuse.
 // Only buffers up to 16KB are pooled to prevent memory bloat.
 func (bp *BufferPool) PutPacketBuffer(buf []byte) {
 	if cap(buf) <= 16384 { // Only pool buffers up to 16KB
-		bp.packetBuffers.Put(interface{}(buf))
+		// Reset the slice to avoid keeping references to the underlying data
+		buf = buf[:0]
+		bp.packetBuffers.Put(buf)
 	}
 }
 
