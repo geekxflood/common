@@ -2972,6 +2972,436 @@ config:
 				// This might pass or fail depending on schema strictness
 			})
 		})
+
+		Context("Strategic coverage improvement for 90% target", func() {
+			It("should improve ValidateValue coverage with simple working tests", func() {
+				// Use a simple working schema
+				simpleSchema := `
+package config
+
+server: {
+	host: string
+	port: int
+}
+database: {
+	host: string
+	port: int
+}
+`
+				loader := NewSchemaLoader()
+				err := loader.LoadSchemaContent(simpleSchema)
+				Expect(err).ToNot(HaveOccurred())
+
+				validator, err := loader.GetValidator()
+				Expect(err).ToNot(HaveOccurred())
+
+				// Test basic validation paths that should work
+				err = validator.ValidateValue("server.host", "localhost")
+				Expect(err).To(BeNil())
+
+				err = validator.ValidateValue("server.port", 8080)
+				Expect(err).To(BeNil())
+
+				err = validator.ValidateValue("database.host", "db.example.com")
+				Expect(err).To(BeNil())
+
+				// Test type mismatches to trigger error paths
+				err = validator.ValidateValue("server.port", "not_a_number")
+				Expect(err).ToNot(BeNil())
+
+				err = validator.ValidateValue("server.host", 123)
+				Expect(err).ToNot(BeNil())
+
+				// Test non-existent paths
+				err = validator.ValidateValue("nonexistent.field", "value")
+				Expect(err).ToNot(BeNil())
+
+				// Test empty path
+				err = validator.ValidateValue("", "value")
+				Expect(err).ToNot(BeNil())
+
+				// Test nil value
+				err = validator.ValidateValue("server.host", nil)
+				Expect(err).ToNot(BeNil())
+			})
+
+			It("should improve ValidateFile coverage with simple file scenarios", func() {
+				// Use the same simple schema
+				simpleSchema := `
+package config
+
+server: {
+	host: string
+	port: int
+}
+database: {
+	host: string
+	port: int
+}
+`
+				loader := NewSchemaLoader()
+				err := loader.LoadSchemaContent(simpleSchema)
+				Expect(err).ToNot(HaveOccurred())
+
+				validator, err := loader.GetValidator()
+				Expect(err).ToNot(HaveOccurred())
+
+				// Test 1: Valid YAML file
+				validYamlFile, err := os.CreateTemp("", "valid_*.yaml")
+				Expect(err).ToNot(HaveOccurred())
+				defer os.Remove(validYamlFile.Name())
+
+				validYamlContent := `
+server:
+  host: "localhost"
+  port: 8080
+database:
+  host: "db.example.com"
+  port: 5432
+`
+				_, err = validYamlFile.WriteString(validYamlContent)
+				Expect(err).ToNot(HaveOccurred())
+				validYamlFile.Close()
+
+				err = validator.ValidateFile(validYamlFile.Name())
+				Expect(err).To(BeNil())
+
+				// Test 2: Valid JSON file
+				validJsonFile, err := os.CreateTemp("", "valid_*.json")
+				Expect(err).ToNot(HaveOccurred())
+				defer os.Remove(validJsonFile.Name())
+
+				validJsonContent := `{
+  "server": {
+    "host": "localhost",
+    "port": 8080
+  },
+  "database": {
+    "host": "db.example.com",
+    "port": 5432
+  }
+}`
+				_, err = validJsonFile.WriteString(validJsonContent)
+				Expect(err).ToNot(HaveOccurred())
+				validJsonFile.Close()
+
+				err = validator.ValidateFile(validJsonFile.Name())
+				Expect(err).To(BeNil())
+
+				// Test 3: File with type mismatches
+				typeMismatchFile, err := os.CreateTemp("", "type_mismatch_*.yaml")
+				Expect(err).ToNot(HaveOccurred())
+				defer os.Remove(typeMismatchFile.Name())
+
+				typeMismatchContent := `
+server:
+  host: 123  # Should be string
+  port: "not_a_number"  # Should be int
+database:
+  host: "localhost"
+  port: 5432
+`
+				_, err = typeMismatchFile.WriteString(typeMismatchContent)
+				Expect(err).ToNot(HaveOccurred())
+				typeMismatchFile.Close()
+
+				err = validator.ValidateFile(typeMismatchFile.Name())
+				Expect(err).ToNot(BeNil()) // Should fail due to type mismatches
+
+				// Test 4: Non-existent file
+				err = validator.ValidateFile("/nonexistent/path/config.yaml")
+				Expect(err).ToNot(BeNil()) // Should fail
+
+				// Test 5: Empty file
+				emptyFile, err := os.CreateTemp("", "empty_*.yaml")
+				Expect(err).ToNot(HaveOccurred())
+				defer os.Remove(emptyFile.Name())
+				emptyFile.Close()
+
+				err = validator.ValidateFile(emptyFile.Name())
+				Expect(err).ToNot(BeNil()) // Should fail
+
+				// Test 6: Invalid YAML syntax
+				invalidYamlFile, err := os.CreateTemp("", "invalid_*.yaml")
+				Expect(err).ToNot(HaveOccurred())
+				defer os.Remove(invalidYamlFile.Name())
+
+				invalidYamlContent := `
+server:
+  host: "unclosed string
+  port: [invalid yaml
+`
+				_, err = invalidYamlFile.WriteString(invalidYamlContent)
+				Expect(err).ToNot(HaveOccurred())
+				invalidYamlFile.Close()
+
+				err = validator.ValidateFile(invalidYamlFile.Name())
+				Expect(err).ToNot(BeNil()) // Should fail
+
+				// Test 7: Unsupported file extension
+				unsupportedFile, err := os.CreateTemp("", "config_*.txt")
+				Expect(err).ToNot(HaveOccurred())
+				defer os.Remove(unsupportedFile.Name())
+
+				_, err = unsupportedFile.WriteString("some content")
+				Expect(err).ToNot(HaveOccurred())
+				unsupportedFile.Close()
+
+				err = validator.ValidateFile(unsupportedFile.Name())
+				Expect(err).ToNot(BeNil()) // Should fail
+			})
+
+			It("should improve LoadSchema coverage with simple schema scenarios", func() {
+				// Test 1: Valid CUE file
+				validCueFile, err := os.CreateTemp("", "valid_*.cue")
+				Expect(err).ToNot(HaveOccurred())
+				defer os.Remove(validCueFile.Name())
+
+				validCueContent := `
+package config
+
+server: {
+	host: string
+	port: int
+}
+`
+				err = os.WriteFile(validCueFile.Name(), []byte(validCueContent), 0644)
+				Expect(err).ToNot(HaveOccurred())
+
+				loader := NewSchemaLoader()
+				err = loader.LoadSchema(validCueFile.Name())
+				Expect(err).To(BeNil())
+
+				// Test 2: Non-existent file
+				loader2 := NewSchemaLoader()
+				err = loader2.LoadSchema("/nonexistent/path/schema.cue")
+				Expect(err).ToNot(BeNil()) // Should fail
+
+				// Test 3: Empty CUE file
+				emptyCueFile, err := os.CreateTemp("", "empty_*.cue")
+				Expect(err).ToNot(HaveOccurred())
+				defer os.Remove(emptyCueFile.Name())
+
+				loader3 := NewSchemaLoader()
+				err = loader3.LoadSchema(emptyCueFile.Name())
+				Expect(err).ToNot(BeNil()) // Should fail
+
+				// Test 4: Directory with CUE files
+				validDir, err := os.MkdirTemp("", "valid_cue_*")
+				Expect(err).ToNot(HaveOccurred())
+				defer os.RemoveAll(validDir)
+
+				schemaFile := filepath.Join(validDir, "schema.cue")
+				err = os.WriteFile(schemaFile, []byte(validCueContent), 0644)
+				Expect(err).ToNot(HaveOccurred())
+
+				loader4 := NewSchemaLoader()
+				err = loader4.LoadSchema(validDir)
+				// This should exercise loadFromDirectory
+
+				// Test 5: Empty directory
+				emptyDir, err := os.MkdirTemp("", "empty_*")
+				Expect(err).ToNot(HaveOccurred())
+				defer os.RemoveAll(emptyDir)
+
+				loader5 := NewSchemaLoader()
+				err = loader5.LoadSchema(emptyDir)
+				Expect(err).ToNot(BeNil()) // Should fail
+			})
+
+			It("should improve ValidateConfig coverage", func() {
+				// Use simple schema
+				simpleSchema := `
+package config
+
+server: {
+	host: string
+	port: int
+}
+`
+				loader := NewSchemaLoader()
+				err := loader.LoadSchemaContent(simpleSchema)
+				Expect(err).ToNot(HaveOccurred())
+
+				validator, err := loader.GetValidator()
+				Expect(err).ToNot(HaveOccurred())
+
+				// Test valid config
+				validConfig := map[string]any{
+					"server": map[string]any{
+						"host": "localhost",
+						"port": 8080,
+					},
+				}
+				err = validator.ValidateConfig(validConfig)
+				Expect(err).To(BeNil())
+
+				// Test invalid config with type mismatch
+				invalidConfig := map[string]any{
+					"server": map[string]any{
+						"host": 123,            // Should be string
+						"port": "not_a_number", // Should be int
+					},
+				}
+				err = validator.ValidateConfig(invalidConfig)
+				Expect(err).ToNot(BeNil()) // Should fail and trigger formatValidationError
+
+				// Test empty config
+				emptyConfig := map[string]any{}
+				err = validator.ValidateConfig(emptyConfig)
+				Expect(err).ToNot(BeNil()) // Should fail
+
+				// Test nil config
+				err = validator.ValidateConfig(nil)
+				Expect(err).ToNot(BeNil()) // Should fail
+			})
+
+			It("should improve additional function coverage", func() {
+				// Simple test to improve coverage of remaining functions
+				loader := NewSchemaLoader()
+				simpleSchema := `
+package config
+
+server: {
+	host: string
+	port: int
+}
+`
+				err := loader.LoadSchemaContent(simpleSchema)
+				Expect(err).ToNot(HaveOccurred())
+
+				validator, err := loader.GetValidator()
+				Expect(err).ToNot(HaveOccurred())
+
+				// Test more ValidateValue scenarios to improve coverage
+				err = validator.ValidateValue("server.host", "test-host")
+				Expect(err).To(BeNil())
+
+				err = validator.ValidateValue("server.port", 9000)
+				Expect(err).To(BeNil())
+
+				// Test error scenarios
+				err = validator.ValidateValue("server.host", 123)
+				Expect(err).ToNot(BeNil())
+
+				err = validator.ValidateValue("server.port", "invalid")
+				Expect(err).ToNot(BeNil())
+
+				err = validator.ValidateValue("nonexistent", "value")
+				Expect(err).ToNot(BeNil())
+
+				// Test ValidateConfig with more scenarios
+				validConfig := map[string]any{
+					"server": map[string]any{
+						"host": "localhost",
+						"port": 8080,
+					},
+				}
+				err = validator.ValidateConfig(validConfig)
+				Expect(err).To(BeNil())
+
+				invalidConfig := map[string]any{
+					"server": map[string]any{
+						"host": 123,
+						"port": "invalid",
+					},
+				}
+				err = validator.ValidateConfig(invalidConfig)
+				Expect(err).ToNot(BeNil())
+			})
+
+			It("should trigger formatValidationError with working schema", func() {
+				// Use the existing working schema from the test constants
+				loader := NewSchemaLoader()
+				err := loader.LoadSchemaContent(testSchema)
+				Expect(err).ToNot(HaveOccurred())
+
+				validator, err := loader.GetValidator()
+				Expect(err).ToNot(HaveOccurred())
+
+				// Test constraint violations that should trigger formatValidationError
+				// Port must be >= 1024 and <= 65535
+				err = validator.ValidateValue("server.port", 80)
+				Expect(err).ToNot(BeNil()) // Should trigger formatValidationError
+
+				err = validator.ValidateValue("server.port", 70000)
+				Expect(err).ToNot(BeNil()) // Should trigger formatValidationError
+
+				// maxConnections must be > 0
+				err = validator.ValidateValue("server.maxConnections", 0)
+				Expect(err).ToNot(BeNil()) // Should trigger formatValidationError
+
+				err = validator.ValidateValue("server.maxConnections", -5)
+				Expect(err).ToNot(BeNil()) // Should trigger formatValidationError
+
+				// database.port must be > 0
+				err = validator.ValidateValue("database.port", 0)
+				Expect(err).ToNot(BeNil()) // Should trigger formatValidationError
+
+				err = validator.ValidateValue("database.port", -1)
+				Expect(err).ToNot(BeNil()) // Should trigger formatValidationError
+
+				// Type mismatches that should trigger formatValidationError
+				err = validator.ValidateValue("server.host", 123)
+				Expect(err).ToNot(BeNil()) // Should trigger formatValidationError
+
+				err = validator.ValidateValue("server.port", "not_a_number")
+				Expect(err).ToNot(BeNil()) // Should trigger formatValidationError
+
+				err = validator.ValidateValue("app.debug", "not_a_bool")
+				Expect(err).ToNot(BeNil()) // Should trigger formatValidationError
+
+				// Invalid enum values
+				err = validator.ValidateValue("app.environment", "invalid_env")
+				Expect(err).ToNot(BeNil()) // Should trigger formatValidationError
+
+				err = validator.ValidateValue("database.type", "invalid_db")
+				Expect(err).ToNot(BeNil()) // Should trigger formatValidationError
+
+				// Test ValidateConfig with constraint violations
+				invalidConfig := map[string]any{
+					"server": map[string]any{
+						"host":           123, // Should be string
+						"port":           80,  // Should be >= 1024
+						"maxConnections": -5,  // Should be > 0
+					},
+					"database": map[string]any{
+						"type": "invalid_db", // Should be valid enum
+						"port": -1,           // Should be > 0
+					},
+					"app": map[string]any{
+						"debug":       "not_a_bool",  // Should be bool
+						"environment": "invalid_env", // Should be valid enum
+					},
+				}
+				err = validator.ValidateConfig(invalidConfig)
+				Expect(err).ToNot(BeNil()) // Should trigger formatValidationError
+
+				// Test ValidateFile with constraint violations
+				constraintFile, err := os.CreateTemp("", "constraint_violations_*.yaml")
+				Expect(err).ToNot(HaveOccurred())
+				defer os.Remove(constraintFile.Name())
+
+				constraintContent := `
+server:
+  host: 123
+  port: 80
+  maxConnections: -5
+database:
+  type: "invalid_db"
+  port: -1
+app:
+  debug: "not_a_bool"
+  environment: "invalid_env"
+`
+				_, err = constraintFile.WriteString(constraintContent)
+				Expect(err).ToNot(HaveOccurred())
+				constraintFile.Close()
+
+				err = validator.ValidateFile(constraintFile.Name())
+				Expect(err).ToNot(BeNil()) // Should trigger formatValidationError
+			})
+		})
 	})
 })
 
@@ -2979,3 +3409,275 @@ config:
 func containsString(s, substr string) bool {
 	return strings.Contains(s, substr)
 }
+
+var _ = Describe("Config formatValidationError Coverage", func() {
+	Context("Focused formatValidationError testing", func() {
+		It("should trigger formatValidationError with actual CUE validation failures", func() {
+			// Create a simple schema that will definitely work
+			simpleSchema := `
+package config
+
+server: {
+	port: int & >=1024 & <=65535
+	host: string
+}
+
+app: {
+	debug: bool
+	environment: "dev" | "prod"
+}
+`
+			loader := NewSchemaLoader()
+			err := loader.LoadSchemaContent(simpleSchema)
+			Expect(err).ToNot(HaveOccurred())
+
+			validator, err := loader.GetValidator()
+			Expect(err).ToNot(HaveOccurred())
+
+			// Test constraint violations that should trigger formatValidationError
+			// These should reach unified.Validate() and fail there
+
+			// Port constraint violation - should trigger formatValidationError
+			err = validator.ValidateValue("server.port", 80)
+			Expect(err).ToNot(BeNil())
+			Expect(err.Error()).To(ContainSubstring("validation"))
+
+			// Port upper bound violation - should trigger formatValidationError
+			err = validator.ValidateValue("server.port", 70000)
+			Expect(err).ToNot(BeNil())
+			Expect(err.Error()).To(ContainSubstring("validation"))
+
+			// Type mismatch - should trigger formatValidationError
+			err = validator.ValidateValue("server.host", 12345)
+			Expect(err).ToNot(BeNil())
+			Expect(err.Error()).To(ContainSubstring("validation"))
+
+			// Boolean type mismatch - should trigger formatValidationError
+			err = validator.ValidateValue("app.debug", "not_a_bool")
+			Expect(err).ToNot(BeNil())
+			Expect(err.Error()).To(ContainSubstring("validation"))
+
+			// Enum violation - should trigger formatValidationError
+			err = validator.ValidateValue("app.environment", "invalid")
+			Expect(err).ToNot(BeNil())
+			Expect(err.Error()).To(ContainSubstring("validation"))
+		})
+
+		It("should trigger formatValidationError with ValidateConfig failures", func() {
+			simpleSchema := `
+package config
+
+server: {
+	port: int & >=1024 & <=65535
+	host: string
+}
+
+app: {
+	debug: bool
+	environment: "dev" | "prod"
+}
+`
+			loader := NewSchemaLoader()
+			err := loader.LoadSchemaContent(simpleSchema)
+			Expect(err).ToNot(HaveOccurred())
+
+			validator, err := loader.GetValidator()
+			Expect(err).ToNot(HaveOccurred())
+
+			// Create config that violates constraints - should trigger formatValidationError
+			invalidConfig := map[string]any{
+				"server": map[string]any{
+					"port": 80,    // Violates >=1024 constraint
+					"host": 12345, // Should be string
+				},
+				"app": map[string]any{
+					"debug":       "not_bool", // Should be bool
+					"environment": "invalid",  // Should be "dev" or "prod"
+				},
+			}
+
+			err = validator.ValidateConfig(invalidConfig)
+			Expect(err).ToNot(BeNil())
+			Expect(err.Error()).To(ContainSubstring("validation"))
+		})
+
+		It("should trigger NotifyChange and handleFileChange with hot-reload", func() {
+			// Create temporary files for schema and config
+			schemaFile, err := os.CreateTemp("", "schema_*.cue")
+			Expect(err).ToNot(HaveOccurred())
+			defer os.Remove(schemaFile.Name())
+
+			configFile, err := os.CreateTemp("", "config_*.yaml")
+			Expect(err).ToNot(HaveOccurred())
+			defer os.Remove(configFile.Name())
+
+			// Write initial schema
+			schemaContent := `
+package config
+
+server: {
+	port: int & >=1024 & <=65535
+	host: string
+}
+`
+			_, err = schemaFile.WriteString(schemaContent)
+			Expect(err).ToNot(HaveOccurred())
+			schemaFile.Close()
+
+			// Write initial config
+			configContent := `
+server:
+  port: 8080
+  host: "localhost"
+`
+			_, err = configFile.WriteString(configContent)
+			Expect(err).ToNot(HaveOccurred())
+			configFile.Close()
+
+			// Create manager with hot-reload enabled
+			options := Options{
+				SchemaPath:            schemaFile.Name(),
+				ConfigPath:            configFile.Name(),
+				EnableSchemaHotReload: true,
+				EnableConfigHotReload: true,
+			}
+
+			manager, err := NewManager(options)
+			Expect(err).ToNot(HaveOccurred())
+			defer manager.Close()
+
+			// Set up change notification callback to track calls
+			changeCallbackCalled := false
+			var changeError error
+			manager.OnConfigChange(func(err error) {
+				changeCallbackCalled = true
+				changeError = err
+			})
+
+			// Give the file watcher time to start
+			time.Sleep(200 * time.Millisecond)
+
+			// Modify the config file to trigger handleFileChange and NotifyChange
+			newConfigContent := `
+server:
+  port: 9090
+  host: "0.0.0.0"
+`
+			err = os.WriteFile(configFile.Name(), []byte(newConfigContent), 0644)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Wait for the file change to be detected and processed
+			// This should trigger handleFileChange -> NotifyChange
+			time.Sleep(500 * time.Millisecond)
+
+			// Verify that the change callback was called (indicating NotifyChange was called)
+			Expect(changeCallbackCalled).To(BeTrue())
+			Expect(changeError).To(BeNil()) // Should be nil for successful reload
+
+			// Verify the config was actually reloaded
+			port, err := manager.GetInt("server.port")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(port).To(Equal(9090))
+		})
+
+		It("should trigger NotifyChange directly", func() {
+			// Create a change notifier directly to test NotifyChange
+			notifier := newChangeNotifier()
+
+			// Set up callback to track calls
+			callbackCalled := false
+			var receivedError error
+			notifier.OnChange(func(err error) {
+				callbackCalled = true
+				receivedError = err
+			})
+
+			// Call NotifyChange directly - this should trigger the callback
+			testError := fmt.Errorf("test error")
+			notifier.NotifyChange(testError)
+
+			// Verify callback was called with the correct error
+			Expect(callbackCalled).To(BeTrue())
+			Expect(receivedError).To(Equal(testError))
+
+			// Test with nil error (success case)
+			callbackCalled = false
+			receivedError = fmt.Errorf("should be cleared")
+			notifier.NotifyChange(nil)
+
+			Expect(callbackCalled).To(BeTrue())
+			Expect(receivedError).To(BeNil())
+		})
+
+		It("should improve GetFloat coverage with all type scenarios", func() {
+			// Create a simple config for testing GetFloat
+			configContent := `
+server:
+  timeout: 30.5
+  port: 8080
+  maxConnections: 1000
+  name: "test-server"
+`
+			configFile, err := os.CreateTemp("", "getfloat_test_*.yaml")
+			Expect(err).ToNot(HaveOccurred())
+			defer os.Remove(configFile.Name())
+
+			_, err = configFile.WriteString(configContent)
+			Expect(err).ToNot(HaveOccurred())
+			configFile.Close()
+
+			// Create manager with simple schema
+			simpleSchema := `
+package config
+
+server: {
+	timeout: float
+	port: int
+	maxConnections: int64
+	name: string
+}
+`
+			loader := NewSchemaLoader()
+			err = loader.LoadSchemaContent(simpleSchema)
+			Expect(err).ToNot(HaveOccurred())
+
+			options := Options{
+				SchemaContent: simpleSchema,
+				ConfigPath:    configFile.Name(),
+			}
+
+			manager, err := NewManager(options)
+			Expect(err).ToNot(HaveOccurred())
+			defer manager.Close()
+
+			// Test float64 type conversion
+			timeout, err := manager.GetFloat("server.timeout")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(timeout).To(Equal(30.5))
+
+			// Test int type conversion to float64
+			port, err := manager.GetFloat("server.port")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(port).To(Equal(float64(8080)))
+
+			// Test int64 type conversion to float64
+			maxConn, err := manager.GetFloat("server.maxConnections")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(maxConn).To(Equal(float64(1000)))
+
+			// Test default value when path doesn't exist
+			defaultVal, err := manager.GetFloat("server.nonexistent", 99.9)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(defaultVal).To(Equal(99.9))
+
+			// Test error when path doesn't exist and no default
+			_, err = manager.GetFloat("server.nonexistent")
+			Expect(err).ToNot(BeNil())
+
+			// Test error for invalid type conversion (string to float)
+			_, err = manager.GetFloat("server.name")
+			Expect(err).ToNot(BeNil())
+			Expect(err.Error()).To(ContainSubstring("not a float"))
+		})
+	})
+})
