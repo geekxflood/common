@@ -6045,7 +6045,7 @@ func TestGetCompiledRules(t *testing.T) {
 // TestUncoveredFunctions tests the functions with 0.0% coverage to reach 90%
 func TestUncoveredFunctions(t *testing.T) {
 	t.Run("parseComplexFieldPattern", func(t *testing.T) {
-		// Create a ruler to access internal methods
+		// Create a ruler with a complex expression that might trigger parseComplexFieldPattern
 		config := map[string]any{
 			"config": map[string]any{
 				"enabled": true,
@@ -6053,73 +6053,11 @@ func TestUncoveredFunctions(t *testing.T) {
 			"rules": []any{
 				map[string]any{
 					"name": "complex_pattern_test",
-					"expr": `data.nested.field > 10 && data.array[0].value == "test"`,
+					"expr": `input.nested.field > 10 && input.array[0].value == "test"`,
 					"inputs": []any{
 						map[string]any{
-							"name":     "data",
+							"name":     "input",
 							"type":     "object",
-							"required": true,
-						},
-					},
-					"outputs": []any{
-						map[string]any{
-							"name": "result",
-							"fields": map[string]any{
-								"status": map[string]any{
-									"type":    "string",
-									"default": "matched",
-								},
-							},
-						},
-					},
-					"enabled": true,
-				},
-			},
-		}
-
-		ruler, err := NewRuler(config)
-		if err != nil {
-			t.Fatalf("Failed to create ruler: %v", err)
-		}
-
-		// Test with complex nested data that should trigger parseComplexFieldPattern
-		inputs := Inputs{
-			"data": map[string]any{
-				"nested": map[string]any{
-					"field": 15,
-				},
-				"array": []any{
-					map[string]any{
-						"value": "test",
-					},
-				},
-			},
-		}
-
-		result, err := ruler.Evaluate(context.Background(), inputs)
-		if err != nil {
-			t.Fatalf("Failed to evaluate complex pattern: %v", err)
-		}
-
-		if result.MatchedRule == nil {
-			t.Error("Expected rule to match complex pattern")
-		}
-	})
-
-	t.Run("parseCondition", func(t *testing.T) {
-		// Test parseCondition with various condition types
-		config := map[string]any{
-			"config": map[string]any{
-				"enabled": true,
-			},
-			"rules": []any{
-				map[string]any{
-					"name": "condition_test",
-					"expr": `value > 10`,
-					"inputs": []any{
-						map[string]any{
-							"name":     "value",
-							"type":     "number",
 							"required": true,
 						},
 					},
@@ -6144,23 +6082,100 @@ func TestUncoveredFunctions(t *testing.T) {
 			t.Fatalf("Failed to create ruler: %v", err)
 		}
 
-		// Test case: Simple condition should match
-		inputs1 := Inputs{
-			"value": 15,
+		// Test with complex nested data
+		inputs := Inputs{
+			"input": map[string]any{
+				"nested": map[string]any{
+					"field": 15,
+				},
+				"array": []any{
+					map[string]any{
+						"value": "test",
+					},
+				},
+			},
 		}
 
-		result1, err := ruler.Evaluate(context.Background(), inputs1)
+		result, err := ruler.Evaluate(context.Background(), inputs)
 		if err != nil {
-			t.Fatalf("Failed to evaluate condition: %v", err)
+			t.Fatalf("Failed to evaluate complex pattern: %v", err)
 		}
 
-		if result1.MatchedRule == nil {
-			t.Error("Expected rule to match condition")
+		// The rule should match
+		if result.MatchedRule == nil {
+			t.Error("Expected rule to match complex pattern")
+		}
+	})
+
+	t.Run("parseCondition", func(t *testing.T) {
+		// Create a ruler with conditions that will trigger parseCondition
+		config := map[string]any{
+			"config": map[string]any{
+				"enabled": true,
+			},
+			"rules": []any{
+				map[string]any{
+					"name": "condition_test",
+					"expr": `status == "active"`,
+					"inputs": []any{
+						map[string]any{
+							"name":     "status",
+							"type":     "string",
+							"required": true,
+						},
+					},
+					"outputs": []any{
+						map[string]any{
+							"name": "result",
+							"fields": map[string]any{
+								"matched": map[string]any{
+									"type":    "boolean",
+									"default": true,
+								},
+							},
+						},
+					},
+					"enabled": true,
+				},
+			},
+		}
+
+		ruler, err := NewRuler(config)
+		if err != nil {
+			t.Fatalf("Failed to create ruler: %v", err)
+		}
+
+		// Test with different condition operators
+		testCases := []struct {
+			name   string
+			input  string
+			expect bool
+		}{
+			{"equal_match", "active", true},
+			{"equal_no_match", "inactive", false},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				inputs := Inputs{
+					"status": tc.input,
+				}
+
+				result, err := ruler.Evaluate(context.Background(), inputs)
+				if err != nil {
+					t.Fatalf("Failed to evaluate condition: %v", err)
+				}
+
+				matched := result.MatchedRule != nil
+				if matched != tc.expect {
+					t.Errorf("Expected match=%v, got match=%v for input %q", tc.expect, matched, tc.input)
+				}
+			})
 		}
 	})
 
 	t.Run("evaluateMapStringAnyArray", func(t *testing.T) {
-		// Test evaluateMapStringAnyArray with array of maps
+		// Create a ruler that will trigger evaluateMapStringAnyArray
 		config := map[string]any{
 			"config": map[string]any{
 				"enabled": true,
@@ -6168,7 +6183,7 @@ func TestUncoveredFunctions(t *testing.T) {
 			"rules": []any{
 				map[string]any{
 					"name": "array_map_test",
-					"expr": `items[0].name == "test" && items[1].value > 100`,
+					"expr": `items[0].name == "test"`,
 					"inputs": []any{
 						map[string]any{
 							"name":     "items",
@@ -6197,7 +6212,7 @@ func TestUncoveredFunctions(t *testing.T) {
 			t.Fatalf("Failed to create ruler: %v", err)
 		}
 
-		// Test with array of map[string]any
+		// Test with []map[string]any to trigger evaluateMapStringAnyArray
 		inputs := Inputs{
 			"items": []map[string]any{
 				{

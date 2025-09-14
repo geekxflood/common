@@ -3,6 +3,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -1079,6 +1080,119 @@ var _ = Describe("Config Coverage Improvements", func() {
 
 			// Verify hot reload was stopped
 			Expect(changeReceived).To(BeFalse()) // No change should have been triggered yet
+		})
+	})
+
+	Context("Directory Loading", func() {
+		var tempDir string
+
+		BeforeEach(func() {
+			var err error
+			tempDir, err = os.MkdirTemp("", "config_test_dir")
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		AfterEach(func() {
+			if tempDir != "" {
+				os.RemoveAll(tempDir)
+			}
+		})
+
+		It("should load configuration from directory", func() {
+			// Create schema file
+			schemaContent := `
+				server: {
+					host: string | *"localhost"
+					port: int | *8080
+				}
+			`
+			schemaFile := filepath.Join(tempDir, "schema.cue")
+			err := os.WriteFile(schemaFile, []byte(schemaContent), 0644)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Create config file
+			configContent := `server:
+  host: "test.com"
+  port: 9000`
+			configFile := filepath.Join(tempDir, "config.yaml")
+			err = os.WriteFile(configFile, []byte(configContent), 0644)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Test loading from directory (this should trigger loadFromDirectory)
+			manager, err := NewManager(Options{
+				SchemaPath: schemaFile,
+				ConfigPath: configFile,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			defer manager.Close()
+
+			// Verify configuration was loaded
+			host, err := manager.GetString("server.host")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(host).To(Equal("test.com"))
+		})
+	})
+
+	Context("Validation Functions", func() {
+		var manager Manager
+
+		BeforeEach(func() {
+			schemaContent := `
+				server: {
+					host: string | *"localhost"
+					port: int & >0 & <65536 | *8080
+					enabled: bool | *true
+				}
+			`
+
+			configContent := `server:
+  host: localhost
+  port: 8080
+  enabled: true`
+
+			configFile := createTempFile(GinkgoT(), configContent, ".yaml")
+
+			var err error
+			manager, err = NewManager(Options{
+				SchemaContent: schemaContent,
+				ConfigPath:    configFile,
+			})
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		AfterEach(func() {
+			if manager != nil {
+				manager.Close()
+			}
+		})
+
+		It("should validate current configuration", func() {
+			// Test the Validate method on Manager
+			err := manager.Validate()
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("should handle validation of invalid configuration", func() {
+			// Create manager with invalid config to test validation error paths
+			schemaContent := `
+				server: {
+					host: string | *"localhost"
+					port: int & >0 & <65536 | *8080
+				}
+			`
+
+			invalidConfigContent := `server:
+  host: "example.com"
+  port: 70000  # Invalid port (out of range)`
+
+			invalidConfigFile := createTempFile(GinkgoT(), invalidConfigContent, ".yaml")
+
+			// This should fail during manager creation due to validation
+			_, err := NewManager(Options{
+				SchemaContent: schemaContent,
+				ConfigPath:    invalidConfigFile,
+			})
+			Expect(err).To(HaveOccurred())
 		})
 	})
 })

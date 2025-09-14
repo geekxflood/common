@@ -666,4 +666,110 @@ var _ = Describe("Coverage Improvements", func() {
 			Expect(len(entries)).To(Equal(0))
 		})
 	})
+
+	// Additional tests to improve coverage to 90%
+	Describe("Coverage Improvement Tests", func() {
+		Context("MIB parsing edge cases", func() {
+			It("should handle malformed MIB content", func() {
+				// Create a temporary file with malformed MIB content
+				tempFile, err := os.CreateTemp("", "malformed_*.mib")
+				Expect(err).ToNot(HaveOccurred())
+				defer os.Remove(tempFile.Name())
+
+				// Write malformed MIB content to test edge cases
+				malformedContent := `
+invalidOID OBJECT-TYPE
+    SYNTAX INTEGER
+    ACCESS read-only
+    STATUS mandatory
+    DESCRIPTION "Test description with
+                 multiline content"
+    ::= { invalid syntax here }
+
+complexOID OBJECT-TYPE
+    SYNTAX INTEGER
+    ACCESS read-only
+    STATUS mandatory
+    ::= { iso org(3) dod(6) internet(1) private(4) enterprises(1) test(12345) 1 }
+`
+				_, err = tempFile.WriteString(malformedContent)
+				Expect(err).ToNot(HaveOccurred())
+				tempFile.Close()
+
+				// Parse the malformed file - should handle gracefully
+				parser := NewMIBParser()
+				entries, err := parser.ParseFile(tempFile.Name())
+
+				// Should not panic and return some result
+				Expect(err).To(BeNil())
+				Expect(entries).ToNot(BeNil())
+			})
+		})
+
+		Context("OID normalization edge cases", func() {
+			It("should handle various OID normalization scenarios", func() {
+				// Create a temporary directory for MIBs
+				tempDir, err := os.MkdirTemp("", "snmp_test_*")
+				Expect(err).To(BeNil())
+				defer os.RemoveAll(tempDir)
+
+				translator := New()
+				err = translator.Init(tempDir)
+				Expect(err).To(BeNil())
+				defer translator.Close()
+
+				// Test with different OID formats that need normalization
+				testOIDs := []string{
+					"1.3.6.1.2.1.1.1.0",          // Standard format
+					".1.3.6.1.2.1.1.1.0",         // Leading dot
+					"1.3.6.1.2.1.1.1",            // No trailing .0
+					"1.3.6.1.2.1.1.1.0.0",        // Extra trailing zeros
+					"01.03.06.01.02.01.01.01.00", // Leading zeros
+				}
+
+				for _, oid := range testOIDs {
+					result, err := translator.Translate(oid)
+					// Should handle all formats without panicking
+					if err != nil {
+						// Some formats may not be found, but shouldn't panic
+						// The function should return the normalized OID when not found
+						Expect(result).ToNot(BeEmpty())
+					} else {
+						Expect(result).ToNot(BeEmpty())
+					}
+				}
+			})
+		})
+
+		Context("Batch translation edge cases", func() {
+			It("should handle batch translation with various inputs", func() {
+				// Create a temporary directory for MIBs
+				tempDir, err := os.MkdirTemp("", "snmp_test_*")
+				Expect(err).To(BeNil())
+				defer os.RemoveAll(tempDir)
+
+				translator := New()
+				err = translator.Init(tempDir)
+				Expect(err).To(BeNil())
+				defer translator.Close()
+
+				// Test batch translation with mixed valid/invalid OIDs
+				testOIDs := []string{
+					"1.3.6.1.2.1.1.1.0",
+					"invalid.oid",
+					"",
+					"1.3.6.1.2.1.1.2.0",
+				}
+
+				results, err := translator.TranslateBatch(testOIDs)
+				// Batch translation may return errors for unfound OIDs, but should not panic
+				Expect(results).ToNot(BeNil())
+
+				// Test empty batch
+				emptyResults, err := translator.TranslateBatch([]string{})
+				Expect(err).To(BeNil())
+				Expect(emptyResults).ToNot(BeNil())
+			})
+		})
+	})
 })

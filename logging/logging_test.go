@@ -615,4 +615,83 @@ var _ = Describe("Coverage Improvements", func() {
 			// No assertion needed - if we get here without panic, the test passes
 		})
 	})
+
+	// Additional tests to improve coverage to 90%
+	Describe("Coverage Improvement Tests", func() {
+		Context("Get function edge cases", func() {
+			It("should handle Get with various component types", func() {
+				// Test Get with different component types
+				logger1 := Get("test-component", "service")
+				Expect(logger1).ToNot(BeNil())
+				Expect(logger1.GetComponent()).To(Equal("test-component"))
+				Expect(logger1.GetComponentType()).To(Equal("service"))
+
+				// Test Get with empty component type (should use default)
+				logger2 := Get("test-component", "")
+				Expect(logger2).ToNot(BeNil())
+				Expect(logger2.GetComponent()).To(Equal("test-component"))
+				Expect(logger2.GetComponentType()).To(Equal("component"))
+
+				// Test Get with same component name but different types
+				logger3 := Get("test-component", "worker")
+				Expect(logger3).ToNot(BeNil())
+				Expect(logger3.GetComponent()).To(Equal("test-component"))
+				Expect(logger3.GetComponentType()).To(Equal("worker"))
+			})
+		})
+
+		Context("Context logging methods", func() {
+			It("should handle context logging with various scenarios", func() {
+				logger := Get("context-test", "service")
+				ctx := context.Background()
+
+				// Test DebugContext with different argument types
+				logger.DebugContext(ctx, "Debug message with context")
+				logger.DebugContext(ctx, "Debug with args", "key", "value")
+				logger.DebugContext(ctx, "Debug with multiple", "key1", "value1", "key2", 42)
+
+				// Test InfoContext with different argument types
+				logger.InfoContext(ctx, "Info message with context")
+				logger.InfoContext(ctx, "Info with args", "key", "value")
+				logger.InfoContext(ctx, "Info with multiple", "key1", "value1", "key2", 42)
+
+				// Test WarnContext with different argument types
+				logger.WarnContext(ctx, "Warn message with context")
+				logger.WarnContext(ctx, "Warn with args", "key", "value")
+				logger.WarnContext(ctx, "Warn with multiple", "key1", "value1", "key2", 42)
+
+				// Test ErrorContext with different argument types
+				logger.ErrorContext(ctx, "Error message with context")
+				logger.ErrorContext(ctx, "Error with args", "key", "value")
+				logger.ErrorContext(ctx, "Error with multiple", "key1", "value1", "key2", 42)
+			})
+
+			It("should handle context logging with nil context", func() {
+				logger := Get("nil-context-test", "service")
+
+				// Test with nil context - should not panic
+				logger.DebugContext(nil, "Debug with nil context")
+				logger.InfoContext(nil, "Info with nil context")
+				logger.WarnContext(nil, "Warn with nil context")
+				logger.ErrorContext(nil, "Error with nil context")
+			})
+		})
+
+		Context("Global logger wrapper edge cases", func() {
+			It("should handle global logger methods with various inputs", func() {
+				// Test global logger methods with different argument patterns
+				Debug("Global debug message")
+				Debug("Global debug with args", "key", "value")
+
+				Info("Global info message")
+				Info("Global info with args", "key", "value")
+
+				Warn("Global warn message")
+				Warn("Global warn with args", "key", "value")
+
+				Error("Global error message")
+				Error("Global error with args", "key", "value")
+			})
+		})
+	})
 })
