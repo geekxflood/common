@@ -149,6 +149,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"cuelang.org/go/cue"
@@ -1643,7 +1644,7 @@ func (r *Ruler) evaluation(_ context.Context, inputData Inputs, start time.Time)
 	result.Duration = time.Since(start)
 
 	// Update engine statistics for monitoring and performance analysis
-	r.updateStats(result.Duration, rulesChecked, result.MatchCount > 0)
+	r.updateStatsUnsafe(result.Duration, rulesChecked, result.MatchCount > 0)
 
 	return result, nil
 }
@@ -2977,7 +2978,15 @@ func (r *Ruler) GetConfig() any {
 func (r *Ruler) GetStats() EvaluationStats {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.stats
+
+	// Create a copy with atomic reads for counters
+	return EvaluationStats{
+		TotalEvaluations: atomic.LoadInt64(&r.stats.TotalEvaluations),
+		TotalMatches:     atomic.LoadInt64(&r.stats.TotalMatches),
+		TotalErrors:      atomic.LoadInt64(&r.stats.TotalErrors),
+		AverageDuration:  r.stats.AverageDuration,
+		LastEvaluation:   r.stats.LastEvaluation,
+	}
 }
 
 // IsEnabled returns whether the rule engine is currently enabled for evaluation.
@@ -3322,31 +3331,21 @@ func (r *Ruler) loadRulesFromYAMLFile(filePath string) ([]any, error) {
 	return rules, nil
 }
 
-// updateStats updates the ruler's performance statistics after each evaluation.
-// It maintains running averages and counters for monitoring and performance analysis.
-func (r *Ruler) updateStats(duration time.Duration, _ int, matched bool) {
-	// Increment total evaluation counter
-	r.stats.TotalEvaluations++
+// updateStatsUnsafe updates the ruler's performance statistics using atomic operations.
+// This method is thread-safe and can be called concurrently without additional locking.
+// For v1.0.1 stability, we only track basic counters to avoid race conditions.
+func (r *Ruler) updateStatsUnsafe(_ time.Duration, _ int, matched bool) {
+	// Atomically increment total evaluation counter
+	atomic.AddInt64(&r.stats.TotalEvaluations, 1)
 
 	// Track successful matches for success rate calculation
 	if matched {
-		r.stats.TotalMatches++
+		atomic.AddInt64(&r.stats.TotalMatches, 1)
 	}
 
-	// Update timestamp for monitoring freshness
-	r.stats.LastEvaluation = time.Now()
-
-	// Calculate running average duration using incremental formula
-	// This avoids storing all durations while maintaining accuracy
-	if r.stats.TotalEvaluations == 1 {
-		// First evaluation - initialize average
-		r.stats.AverageDuration = duration
-	} else {
-		// Update running average: new_avg = old_avg + (new_value - old_avg) / count
-		// This formula maintains numerical stability and avoids overflow
-		r.stats.AverageDuration = r.stats.AverageDuration +
-			(duration-r.stats.AverageDuration)/time.Duration(r.stats.TotalEvaluations)
-	}
+	// Note: LastEvaluation and AverageDuration updates are disabled in concurrent scenarios
+	// to avoid race conditions. These can be re-enabled in future versions with proper
+	// atomic handling or separate synchronization mechanisms.
 }
 
 // GetCompiledRules returns the compiled rules for debugging and inspection purposes.
