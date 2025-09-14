@@ -4378,32 +4378,52 @@ invalid: {
 			Expect(err.Error()).To(ContainSubstring("failed to compile CUE schema content"))
 		})
 
-		It("should improve findNextVariableExpression coverage to 100%", func() {
-			// Test findNextVariableExpression with various input scenarios
-			// Note: This function is internal, so we test it indirectly through environment variable expansion
+		It("should improve LoadSchemaContent coverage to 100%", func() {
+			// Focus on LoadSchemaContent function which is at 92.9% coverage
+			schemaLoader := NewSchemaLoader()
 
-			// Create a config with environment variable expressions
-			configWithVars := `
-app:
-  name: "${APP_NAME:-default-app}"
-  version: "${APP_VERSION}"
-  timeout: "${TIMEOUT:-30}"
-server:
-  host: "localhost"
-  port: 8080
+			// Test LoadSchemaContent with various edge cases
+			// Test 1: Valid schema content (already covered)
+			err := schemaLoader.LoadSchemaContent(testSchema)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Test 2: Empty schema content (already covered)
+			err = schemaLoader.LoadSchemaContent("")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("schema content cannot be empty"))
+
+			// Test 3: Invalid CUE syntax (already covered)
+			invalidSchema := `invalid: { broken syntax }`
+			err = schemaLoader.LoadSchemaContent(invalidSchema)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("failed to compile CUE schema content"))
+
+			// Test 4: Schema with complex CUE constructs to hit remaining code paths
+			complexSchema := `
+#Config: {
+	app: {
+		name: string
+		version: string | *"1.0.0"
+	}
+	server: {
+		host: string | *"localhost"
+		port: uint16 & >1024 | *8080
+	}
+}
 `
+			err = schemaLoader.LoadSchemaContent(complexSchema)
+			Expect(err).ToNot(HaveOccurred())
 
-			// Set some environment variables for testing
-			os.Setenv("APP_NAME", "test-app")
-			os.Setenv("TIMEOUT", "60")
-			defer func() {
-				os.Unsetenv("APP_NAME")
-				os.Unsetenv("TIMEOUT")
-			}()
+			// Verify the schema was loaded correctly
+			validator, err := schemaLoader.GetValidator()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(validator).ToNot(BeNil())
+		})
 
-			// Create manager with config that has environment variables
+		It("should improve GetDefaults coverage to 100%", func() {
+			// Focus on GetDefaults function which is at 91.7% coverage
 			schemaPath := createTempFile(GinkgoT(), testSchema, ".cue")
-			configPath := createTempFile(GinkgoT(), configWithVars, ".yaml")
+			configPath := createTempFile(GinkgoT(), testConfig, ".yaml")
 
 			manager, err := NewManager(Options{
 				SchemaPath: schemaPath,
@@ -4412,14 +4432,272 @@ server:
 			Expect(err).ToNot(HaveOccurred())
 			defer manager.Close()
 
-			// Test that environment variable expansion worked
+			// Test GetDefaults with schema loader directly (not through manager)
+			schemaLoader := NewSchemaLoader()
+			err = schemaLoader.LoadSchema(schemaPath)
+			Expect(err).ToNot(HaveOccurred())
+
+			defaults, err := schemaLoader.GetDefaults()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(defaults).ToNot(BeNil())
+
+			// Test GetDefaults with empty schema loader (should fail)
+			emptySchemaLoader := NewSchemaLoader()
+			_, err = emptySchemaLoader.GetDefaults()
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("no schema loaded"))
+
+			// Test GetDefaults with schema that has default values
+			schemaLoaderWithDefaults := NewSchemaLoader()
+			schemaWithDefaults := `
+package config
+
+server: {
+	host: string | *"localhost"
+	port: int | *8080
+}
+`
+			err = schemaLoaderWithDefaults.LoadSchemaContent(schemaWithDefaults)
+			Expect(err).ToNot(HaveOccurred())
+
+			defaults, err = schemaLoaderWithDefaults.GetDefaults()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(defaults).ToNot(BeNil())
+		})
+		It("should improve NewManager coverage to 100%", func() {
+			// Focus on NewManager function which is at 91.7% coverage
+			schemaPath := createTempFile(GinkgoT(), testSchema, ".cue")
+			configPath := createTempFile(GinkgoT(), testConfig, ".yaml")
+
+			// Test NewManager with various option combinations to hit remaining code paths
+
+			// Test 1: NewManager with schema path and config path (already covered)
+			manager, err := NewManager(Options{
+				SchemaPath: schemaPath,
+				ConfigPath: configPath,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			defer manager.Close()
+
+			// Test 2: NewManager with schema content instead of path
+			manager2, err := NewManager(Options{
+				SchemaContent: testSchema,
+				ConfigPath:    configPath,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			defer manager2.Close()
+
+			// Test 3: NewManager with hot reload options enabled
+			manager3, err := NewManager(Options{
+				SchemaPath:            schemaPath,
+				ConfigPath:            configPath,
+				EnableSchemaHotReload: true,
+				EnableConfigHotReload: true,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			defer manager3.Close()
+
+			// Test 4: NewManager with invalid options (should fail)
+			_, err = NewManager(Options{
+				// No schema path or content - should fail
+				ConfigPath: configPath,
+			})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("either schema path or schema content is required"))
+		})
+
+		It("should improve GetFloat coverage to 100%", func() {
+			// Focus on GetFloat function which is at 91.7% coverage
+			// Create a config with actual float values for testing
+			configWithFloats := `
+app:
+  name: "test-app"
+  version: "1.0.0"
+server:
+  host: "localhost"
+  port: 8080
+  timeout: 30.5
+  readTimeout: 45.0
+metrics:
+  threshold: 0.95
+  interval: 1.5
+`
+
+			schemaWithFloats := `
+app: {
+	name: string | *"test-app"
+	version: string | *"1.0.0"
+}
+server: {
+	host: string | *"localhost"
+	port: int | *8080
+	timeout: float | *30.0
+	readTimeout: float | *30.0
+}
+metrics: {
+	threshold: float | *0.9
+	interval: float | *1.0
+}
+`
+
+			schemaPath := createTempFile(GinkgoT(), schemaWithFloats, ".cue")
+			configPath := createTempFile(GinkgoT(), configWithFloats, ".yaml")
+
+			manager, err := NewManager(Options{
+				SchemaPath: schemaPath,
+				ConfigPath: configPath,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			defer manager.Close()
+
+			// Test GetFloat with various scenarios to hit remaining code paths
+
+			// Test 1: GetFloat with valid float value
+			floatVal, err := manager.GetFloat("server.timeout")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(floatVal).To(Equal(30.5))
+
+			// Test 2: GetFloat with default value when path doesn't exist
+			defaultVal, err := manager.GetFloat("nonexistent.path", 42.5)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(defaultVal).To(Equal(42.5))
+
+			// Test 3: GetFloat with multiple default values (should use first)
+			firstDefault, err := manager.GetFloat("another.nonexistent.path", 1.1, 2.2, 3.3)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(firstDefault).To(Equal(1.1))
+
+			// Test 4: GetFloat with no default value for nonexistent path (should fail)
+			_, err = manager.GetFloat("missing.path")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("path missing.path not found"))
+		})
+
+		It("should improve setupHotReload coverage to 100%", func() {
+			// Focus on setupHotReload function which is at 87.5% coverage
+			schemaPath := createTempFile(GinkgoT(), testSchema, ".cue")
+			configPath := createTempFile(GinkgoT(), testConfig, ".yaml")
+
+			// Test setupHotReload with various scenarios to hit remaining code paths
+
+			// Test 1: setupHotReload with both schema and config hot reload enabled
+			manager, err := NewManager(Options{
+				SchemaPath:            schemaPath,
+				ConfigPath:            configPath,
+				EnableSchemaHotReload: true,
+				EnableConfigHotReload: true,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			defer manager.Close()
+
+			// Test 2: setupHotReload with only schema hot reload enabled
+			manager2, err := NewManager(Options{
+				SchemaPath:            schemaPath,
+				ConfigPath:            configPath,
+				EnableSchemaHotReload: true,
+				EnableConfigHotReload: false,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			defer manager2.Close()
+
+			// Test 3: setupHotReload with only config hot reload enabled
+			manager3, err := NewManager(Options{
+				SchemaPath:            schemaPath,
+				ConfigPath:            configPath,
+				EnableSchemaHotReload: false,
+				EnableConfigHotReload: true,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			defer manager3.Close()
+		})
+
+		It("should improve skipToNextOccurrence coverage to 100%", func() {
+			// Focus on skipToNextOccurrence function which is at 80.0% coverage
+			// This function is used internally for environment variable parsing
+			// We can test it indirectly through environment variable expansion
+
+			// Create a config with environment variables that will trigger skipToNextOccurrence
+			configWithEnvVars := `
+app:
+  name: "${APP_NAME:-default-app}"
+  version: "${APP_VERSION:-1.0.0}"
+  description: "App with ${DESCRIPTION:-no description} and ${EXTRA:-nothing}"
+server:
+  host: "${HOST:-localhost}"
+  port: 8080
+`
+
+			simpleSchema := `
+app: {
+	name: string | *"test-app"
+	version: string | *"1.0.0"
+	description: string | *"test description"
+}
+server: {
+	host: string | *"localhost"
+	port: int | *8080
+}
+`
+
+			// Set environment variables to test different parsing scenarios
+			os.Setenv("APP_NAME", "test-application")
+			os.Setenv("DESCRIPTION", "A test application")
+			defer func() {
+				os.Unsetenv("APP_NAME")
+				os.Unsetenv("DESCRIPTION")
+			}()
+
+			schemaPath := createTempFile(GinkgoT(), simpleSchema, ".cue")
+			configPath := createTempFile(GinkgoT(), configWithEnvVars, ".yaml")
+
+			manager, err := NewManager(Options{
+				SchemaPath: schemaPath,
+				ConfigPath: configPath,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			defer manager.Close()
+
+			// Test that environment variable expansion worked correctly
+			// This will exercise skipToNextOccurrence internally
 			appName, err := manager.GetString("app.name")
 			Expect(err).ToNot(HaveOccurred())
-			Expect(appName).To(Equal("test-app"))
+			Expect(appName).To(Equal("test-application"))
 
-			timeout, err := manager.GetString("app.timeout")
+			description, err := manager.GetString("app.description")
 			Expect(err).ToNot(HaveOccurred())
-			Expect(timeout).To(Equal("60"))
+			Expect(description).To(Equal("App with A test application and nothing"))
+		})
+
+		It("should improve LoadSchemaContent coverage to 100%", func() {
+			// Focus on LoadSchemaContent function which is at 92.9% coverage
+			// Target the specific uncovered code paths: empty content and compilation errors
+
+			// Test 1: Empty schema content (line 430-432)
+			loader := NewSchemaLoader()
+			err := loader.LoadSchemaContent("")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(Equal("schema content cannot be empty"))
+
+			// Test 2: Invalid CUE syntax causing compilation error (line 436-438)
+			invalidCueContent := `
+invalid syntax here {
+	missing: colon
+	bad syntax: [
+}
+`
+			err = loader.LoadSchemaContent(invalidCueContent)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("failed to compile CUE schema content"))
+
+			// Test 3: Valid CUE content (success path)
+			validCueContent := `
+app: {
+	name: string | *"test-app"
+	version: string | *"1.0.0"
+}
+`
+			err = loader.LoadSchemaContent(validCueContent)
+			Expect(err).ToNot(HaveOccurred())
 		})
 	})
 })
