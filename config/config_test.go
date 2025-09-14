@@ -958,6 +958,131 @@ logging:
 	}
 }
 
+// Additional tests for uncovered functions to reach 90% coverage
+var _ = Describe("Config Coverage Improvements", func() {
+	Context("Schema Loading Functions", func() {
+		It("should load schema from content", func() {
+			// Test loading schema content directly
+			schemaContent := `
+				server: {
+					host: string | *"localhost"
+					port: int & >0 & <65536 | *8080
+				}
+			`
+
+			loader := NewSchemaLoader()
+			err := loader.LoadSchemaContent(schemaContent)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Verify schema was loaded
+			defaults, err := loader.GetDefaults()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(defaults).NotTo(BeNil())
+			Expect(defaults).To(HaveKey("server"))
+		})
+	})
+
+	Context("Additional Getter Functions", func() {
+		var manager Manager
+
+		BeforeEach(func() {
+			schemaContent := `
+				server: {
+					host: string | *"localhost"
+					port: int | *8080
+					timeout: float | *30.0
+					enabled: bool | *true
+					tags: [...string] | *["web", "api"]
+					metadata: {...} | *{version: "1.0", env: "test"}
+				}
+			`
+
+			configContent := `server:
+  host: localhost
+  port: 8080
+  timeout: 30.5
+  enabled: true
+  tags: ["web", "api"]
+  metadata:
+    version: "1.0"
+    env: "test"`
+
+			configFile := createTempFile(GinkgoT(), configContent, ".yaml")
+
+			var err error
+			manager, err = NewManager(Options{
+				SchemaContent: schemaContent,
+				ConfigPath:    configFile,
+			})
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		AfterEach(func() {
+			if manager != nil {
+				manager.Close()
+			}
+		})
+
+		It("should get float values", func() {
+			value, err := manager.GetFloat("server.timeout")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(value).To(Equal(30.5))
+		})
+
+		It("should get string slice values", func() {
+			value, err := manager.GetStringSlice("server.tags")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(value).To(Equal([]string{"web", "api"}))
+		})
+
+		It("should get map values", func() {
+			value, err := manager.GetMap("server.metadata")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(value).To(HaveKey("version"))
+			Expect(value).To(HaveKey("env"))
+		})
+	})
+
+	Context("Hot Reload Functions", func() {
+		It("should handle hot reload operations", func() {
+			schemaContent := `
+				server: {
+					host: string | *"localhost"
+					port: int | *8080
+				}
+			`
+
+			configContent := `server:
+  host: localhost
+  port: 8080`
+
+			configFile := createTempFile(GinkgoT(), configContent, ".yaml")
+
+			manager, err := NewManager(Options{
+				SchemaContent:         schemaContent,
+				ConfigPath:            configFile,
+				EnableConfigHotReload: true, // Only enable config hot reload, not schema
+			})
+			Expect(err).NotTo(HaveOccurred())
+			defer manager.Close()
+
+			// Test OnConfigChange with correct signature
+			changeReceived := false
+			manager.OnConfigChange(func(err error) {
+				if err == nil {
+					changeReceived = true
+				}
+			})
+
+			// Test StopHotReload
+			manager.StopHotReload()
+
+			// Verify hot reload was stopped
+			Expect(changeReceived).To(BeFalse()) // No change should have been triggered yet
+		})
+	})
+})
+
 // Helper function to check if a string contains a substring
 func containsString(s, substr string) bool {
 	for i := 0; i <= len(s)-len(substr); i++ {

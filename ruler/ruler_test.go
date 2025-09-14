@@ -6041,3 +6041,183 @@ func TestGetCompiledRules(t *testing.T) {
 		t.Error("Expected rule to be enabled")
 	}
 }
+
+// TestUncoveredFunctions tests the functions with 0.0% coverage to reach 90%
+func TestUncoveredFunctions(t *testing.T) {
+	t.Run("parseComplexFieldPattern", func(t *testing.T) {
+		// Create a ruler to access internal methods
+		config := map[string]any{
+			"config": map[string]any{
+				"enabled": true,
+			},
+			"rules": []any{
+				map[string]any{
+					"name": "complex_pattern_test",
+					"expr": `data.nested.field > 10 && data.array[0].value == "test"`,
+					"inputs": []any{
+						map[string]any{
+							"name":     "data",
+							"type":     "object",
+							"required": true,
+						},
+					},
+					"outputs": []any{
+						map[string]any{
+							"name": "result",
+							"fields": map[string]any{
+								"status": map[string]any{
+									"type":    "string",
+									"default": "matched",
+								},
+							},
+						},
+					},
+					"enabled": true,
+				},
+			},
+		}
+
+		ruler, err := NewRuler(config)
+		if err != nil {
+			t.Fatalf("Failed to create ruler: %v", err)
+		}
+
+		// Test with complex nested data that should trigger parseComplexFieldPattern
+		inputs := Inputs{
+			"data": map[string]any{
+				"nested": map[string]any{
+					"field": 15,
+				},
+				"array": []any{
+					map[string]any{
+						"value": "test",
+					},
+				},
+			},
+		}
+
+		result, err := ruler.Evaluate(context.Background(), inputs)
+		if err != nil {
+			t.Fatalf("Failed to evaluate complex pattern: %v", err)
+		}
+
+		if result.MatchedRule == nil {
+			t.Error("Expected rule to match complex pattern")
+		}
+	})
+
+	t.Run("parseCondition", func(t *testing.T) {
+		// Test parseCondition with various condition types
+		config := map[string]any{
+			"config": map[string]any{
+				"enabled": true,
+			},
+			"rules": []any{
+				map[string]any{
+					"name": "condition_test",
+					"expr": `value > 10`,
+					"inputs": []any{
+						map[string]any{
+							"name":     "value",
+							"type":     "number",
+							"required": true,
+						},
+					},
+					"outputs": []any{
+						map[string]any{
+							"name": "result",
+							"fields": map[string]any{
+								"matched": map[string]any{
+									"type":    "boolean",
+									"default": true,
+								},
+							},
+						},
+					},
+					"enabled": true,
+				},
+			},
+		}
+
+		ruler, err := NewRuler(config)
+		if err != nil {
+			t.Fatalf("Failed to create ruler: %v", err)
+		}
+
+		// Test case: Simple condition should match
+		inputs1 := Inputs{
+			"value": 15,
+		}
+
+		result1, err := ruler.Evaluate(context.Background(), inputs1)
+		if err != nil {
+			t.Fatalf("Failed to evaluate condition: %v", err)
+		}
+
+		if result1.MatchedRule == nil {
+			t.Error("Expected rule to match condition")
+		}
+	})
+
+	t.Run("evaluateMapStringAnyArray", func(t *testing.T) {
+		// Test evaluateMapStringAnyArray with array of maps
+		config := map[string]any{
+			"config": map[string]any{
+				"enabled": true,
+			},
+			"rules": []any{
+				map[string]any{
+					"name": "array_map_test",
+					"expr": `items[0].name == "test" && items[1].value > 100`,
+					"inputs": []any{
+						map[string]any{
+							"name":     "items",
+							"type":     "array",
+							"required": true,
+						},
+					},
+					"outputs": []any{
+						map[string]any{
+							"name": "result",
+							"fields": map[string]any{
+								"found": map[string]any{
+									"type":    "boolean",
+									"default": true,
+								},
+							},
+						},
+					},
+					"enabled": true,
+				},
+			},
+		}
+
+		ruler, err := NewRuler(config)
+		if err != nil {
+			t.Fatalf("Failed to create ruler: %v", err)
+		}
+
+		// Test with array of map[string]any
+		inputs := Inputs{
+			"items": []map[string]any{
+				{
+					"name":  "test",
+					"value": 50,
+				},
+				{
+					"name":  "other",
+					"value": 150,
+				},
+			},
+		}
+
+		result, err := ruler.Evaluate(context.Background(), inputs)
+		if err != nil {
+			t.Fatalf("Failed to evaluate array map: %v", err)
+		}
+
+		if result.MatchedRule == nil {
+			t.Error("Expected rule to match array map condition")
+		}
+	})
+}
