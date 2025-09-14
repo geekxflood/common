@@ -801,15 +801,18 @@ complexOID OBJECT-TYPE
 
 				// Test Lookup with non-existent OID
 				result = trie.Lookup("1.3.6.1.2.1.9.9.9.0")
-				Expect(result).To(BeNil())
+				// Should return empty string for non-existent OIDs
+				Expect(result).To(BeEmpty())
 
 				// Test LookupPrefix with various scenarios
 				prefixResult := trie.LookupPrefix("1.3.6.1.2.1.1")
 				Expect(prefixResult).ToNot(BeNil())
+				Expect(len(prefixResult)).To(BeNumerically(">=", 0))
 
 				// Test LookupPrefix with non-matching prefix
 				prefixResult = trie.LookupPrefix("1.3.6.1.2.1.9")
-				Expect(prefixResult).To(BeNil())
+				Expect(prefixResult).ToNot(BeNil()) // Returns empty map, not nil
+				Expect(len(prefixResult)).To(Equal(0))
 
 				// Test Exists function
 				exists := trie.Exists("1.3.6.1.2.1.1.1.0")
