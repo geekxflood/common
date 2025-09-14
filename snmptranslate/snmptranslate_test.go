@@ -393,3 +393,89 @@ customObject OBJECT-TYPE
 
 END
 `
+
+// Benchmark tests to demonstrate performance improvements
+func BenchmarkTranslate(b *testing.B) {
+	translator := New()
+
+	// Initialize with some test data
+	tempDir := b.TempDir()
+	testMIB := `
+TEST-MIB DEFINITIONS ::= BEGIN
+testOID OBJECT-TYPE
+    SYNTAX INTEGER
+    ACCESS read-only
+    STATUS mandatory
+    DESCRIPTION "Test OID"
+    ::= { 1 3 6 1 4 1 12345 1 1 }
+END`
+
+	mibFile := filepath.Join(tempDir, "test.mib")
+	err := os.WriteFile(mibFile, []byte(testMIB), 0644)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	err = translator.Init(tempDir)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	testOIDs := []string{
+		".1.3.6.1.6.3.1.1.5.1",   // coldStart
+		".1.3.6.1.6.3.1.1.5.2",   // warmStart
+		".1.3.6.1.6.3.1.1.5.3",   // linkDown
+		".1.3.6.1.6.3.1.1.5.4",   // linkUp
+		".1.3.6.1.4.1.12345.1.1", // testOID
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		oid := testOIDs[i%len(testOIDs)]
+		_, _ = translator.Translate(oid)
+	}
+}
+
+func BenchmarkTranslateBatch(b *testing.B) {
+	translator := New()
+
+	// Initialize with some test data
+	tempDir := b.TempDir()
+	testMIB := `
+TEST-MIB DEFINITIONS ::= BEGIN
+testOID OBJECT-TYPE
+    SYNTAX INTEGER
+    ACCESS read-only
+    STATUS mandatory
+    DESCRIPTION "Test OID"
+    ::= { 1 3 6 1 4 1 12345 1 1 }
+END`
+
+	mibFile := filepath.Join(tempDir, "test.mib")
+	err := os.WriteFile(mibFile, []byte(testMIB), 0644)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	err = translator.Init(tempDir)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	testOIDs := []string{
+		".1.3.6.1.6.3.1.1.5.1",   // coldStart
+		".1.3.6.1.6.3.1.1.5.2",   // warmStart
+		".1.3.6.1.6.3.1.1.5.3",   // linkDown
+		".1.3.6.1.6.3.1.1.5.4",   // linkUp
+		".1.3.6.1.4.1.12345.1.1", // testOID
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		_, _ = translator.TranslateBatch(testOIDs)
+	}
+}

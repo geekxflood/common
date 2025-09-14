@@ -45,6 +45,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -78,6 +79,13 @@ type Stats struct {
 	TranslationCount int64         `json:"translation_count"`
 	AverageLatency   time.Duration `json:"average_latency"`
 	MemoryUsage      int64         `json:"memory_usage_bytes"`
+}
+
+// atomicStats holds atomic counters for high-frequency operations.
+type atomicStats struct {
+	cacheHits        int64
+	cacheMisses      int64
+	translationCount int64
 }
 
 // OIDEntry represents a single OID mapping in the MIB.
@@ -207,6 +215,7 @@ type translator struct {
 	cache        *Cache
 	loadedMIBs   map[string]bool
 	stats        Stats
+	atomicStats  atomicStats
 	initialized  bool
 	lazyLoading  bool
 	maxCacheSize int
@@ -826,7 +835,7 @@ func (p *MIBParser) ParseFile(filename string) ([]OIDEntry, error) {
 		return nil, err
 	}
 	defer func() {
-		file.Close()
+		_ = file.Close()
 	}()
 
 	// Reset parser state
@@ -1167,7 +1176,7 @@ func (p *MIBParser) ValidateMIBFile(filename string) error {
 		return fmt.Errorf("cannot open file: %w", err)
 	}
 	defer func() {
-		file.Close()
+		_ = file.Close()
 	}()
 
 	scanner := bufio.NewScanner(file)
@@ -1281,31 +1290,30 @@ func (t *translator) Translate(oid string) (string, error) {
 		t.updateStats(time.Since(start))
 	}()
 
-	// Normalize OID
-	normalizedOID := normalizeOID(oid)
+	// Normalize OID (optimized to avoid allocation when possible)
+	normalizedOID := normalizeOIDFast(oid)
 
 	// Check cache first
 	if cached, found := t.cache.Get(normalizedOID); found {
-		t.mu.Lock()
-		t.stats.CacheHits++
-		t.mu.Unlock()
+		// Batch statistics update to reduce mutex contention
+		t.updateStatsAtomic(true, false)
 		return cached, nil
 	}
 
-	t.mu.Lock()
-	t.stats.CacheMisses++
-	t.mu.Unlock()
-
-	// Try to find in trie
+	// Try to find in trie (single lock acquisition)
 	t.mu.RLock()
 	name := t.trie.Lookup(normalizedOID)
 	t.mu.RUnlock()
 
 	if name != "" {
-		// Cache the result
+		// Cache the result and update stats atomically
 		t.cache.Set(normalizedOID, name)
+		t.updateStatsAtomic(false, true)
 		return name, nil
 	}
+
+	// Update cache miss stats
+	t.updateStatsAtomic(false, true)
 
 	// If lazy loading is enabled and OID not found, try loading more MIBs
 	if t.lazyLoading {
@@ -1330,26 +1338,80 @@ func (t *translator) Translate(oid string) (string, error) {
 	return normalizedOID, fmt.Errorf("OID not found: %s", normalizedOID)
 }
 
-// TranslateBatch translates multiple OIDs efficiently.
+// TranslateBatch translates multiple OIDs efficiently using bulk operations.
 func (t *translator) TranslateBatch(oids []string) (map[string]string, error) {
 	if !t.initialized {
 		return nil, errors.New("translator not initialized")
 	}
 
+	if len(oids) == 0 {
+		return make(map[string]string), nil
+	}
+
 	result := make(map[string]string, len(oids))
-	var errors []string
+	var errorList []string
 
-	for _, oid := range oids {
-		name, err := t.Translate(oid)
-		result[oid] = name // Always include in result, even if translation failed
+	// Pre-normalize all OIDs to avoid repeated allocations
+	normalizedOIDs := make([]string, len(oids))
+	for i, oid := range oids {
+		normalizedOIDs[i] = normalizeOIDFast(oid)
+	}
 
-		if err != nil {
-			errors = append(errors, fmt.Sprintf("OID %s: %v", oid, err))
+	// Batch cache lookup
+	cacheHits := 0
+	cacheMisses := 0
+	uncachedOIDs := make([]string, 0, len(oids))
+	uncachedIndices := make([]int, 0, len(oids))
+
+	for i, normalizedOID := range normalizedOIDs {
+		if cached, found := t.cache.Get(normalizedOID); found {
+			result[oids[i]] = cached
+			cacheHits++
+		} else {
+			uncachedOIDs = append(uncachedOIDs, normalizedOID)
+			uncachedIndices = append(uncachedIndices, i)
+			cacheMisses++
 		}
 	}
 
-	if len(errors) > 0 {
-		return result, fmt.Errorf("batch translation errors: %s", strings.Join(errors, "; "))
+	// Update cache statistics atomically
+	if cacheHits > 0 {
+		atomic.AddInt64(&t.atomicStats.cacheHits, int64(cacheHits))
+	}
+	if cacheMisses > 0 {
+		atomic.AddInt64(&t.atomicStats.cacheMisses, int64(cacheMisses))
+	}
+
+	// Batch trie lookup for uncached OIDs
+	if len(uncachedOIDs) > 0 {
+		t.mu.RLock()
+		for i, normalizedOID := range uncachedOIDs {
+			originalIndex := uncachedIndices[i]
+			originalOID := oids[originalIndex]
+
+			if name := t.trie.Lookup(normalizedOID); name != "" {
+				result[originalOID] = name
+				// Cache the successful translation
+				t.cache.Set(normalizedOID, name)
+			} else {
+				// Try fallback translation
+				if basicName := translateCommonOID(normalizedOID); basicName != normalizedOID {
+					result[originalOID] = basicName
+					t.cache.Set(normalizedOID, basicName)
+				} else {
+					result[originalOID] = normalizedOID
+					errorList = append(errorList, fmt.Sprintf("OID %s: not found", originalOID))
+				}
+			}
+		}
+		t.mu.RUnlock()
+	}
+
+	// Update translation count
+	atomic.AddInt64(&t.atomicStats.translationCount, int64(len(oids)))
+
+	if len(errorList) > 0 {
+		return result, fmt.Errorf("batch translation errors: %s", strings.Join(errorList, "; "))
 	}
 
 	return result, nil
@@ -1389,7 +1451,19 @@ func (t *translator) LoadMIB(filename string) error {
 func (t *translator) GetStats() Stats {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return t.stats
+
+	// Return stats with current atomic values
+	stats := t.stats
+	stats.CacheHits = atomic.LoadInt64(&t.atomicStats.cacheHits)
+	stats.CacheMisses = atomic.LoadInt64(&t.atomicStats.cacheMisses)
+	stats.TranslationCount = atomic.LoadInt64(&t.atomicStats.translationCount)
+
+	// Update memory usage if needed
+	if stats.TranslationCount > 0 {
+		stats.MemoryUsage = t.trie.GetMemoryUsage() + t.cache.GetMemoryUsage()
+	}
+
+	return stats
 }
 
 // Close releases resources and cleans up.
@@ -1502,10 +1576,18 @@ func (t *translator) getUnloadedMIBFiles() ([]string, error) {
 
 // updateStats updates translation statistics.
 func (t *translator) updateStats(duration time.Duration) {
+	// Update atomic counter
+	atomic.AddInt64(&t.atomicStats.translationCount, 1)
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	t.stats.TranslationCount++
+	// Sync atomic counters to stats periodically (every 100 translations)
+	if atomic.LoadInt64(&t.atomicStats.translationCount)%100 == 0 {
+		t.stats.CacheHits = atomic.LoadInt64(&t.atomicStats.cacheHits)
+		t.stats.CacheMisses = atomic.LoadInt64(&t.atomicStats.cacheMisses)
+		t.stats.TranslationCount = atomic.LoadInt64(&t.atomicStats.translationCount)
+	}
 
 	// Update average latency using exponential moving average
 	if t.stats.AverageLatency == 0 {
@@ -1516,6 +1598,21 @@ func (t *translator) updateStats(duration time.Duration) {
 			0.9*float64(t.stats.AverageLatency) + 0.1*float64(duration),
 		)
 	}
+
+	// Update memory usage estimate (less frequently to reduce overhead)
+	if atomic.LoadInt64(&t.atomicStats.translationCount)%1000 == 0 {
+		t.stats.MemoryUsage = t.trie.GetMemoryUsage() + t.cache.GetMemoryUsage()
+	}
+}
+
+// updateStatsAtomic updates statistics using atomic operations for better performance.
+func (t *translator) updateStatsAtomic(cacheHit, cacheMiss bool) {
+	if cacheHit {
+		atomic.AddInt64(&t.atomicStats.cacheHits, 1)
+	}
+	if cacheMiss {
+		atomic.AddInt64(&t.atomicStats.cacheMisses, 1)
+	}
 }
 
 // isMIBFile checks if a file is likely a MIB file based on its extension.
@@ -1524,12 +1621,12 @@ func isMIBFile(filename string) bool {
 	return ext == ".mib" || ext == ".txt" || ext == "" // MIB files often have no extension
 }
 
-// normalizeOID normalizes an OID string by ensuring it has a leading dot.
-func normalizeOID(oid string) string {
-	if oid == "" {
+// normalizeOIDFast is an optimized version that avoids string allocation when possible.
+func normalizeOIDFast(oid string) string {
+	if len(oid) == 0 {
 		return oid
 	}
-	if !strings.HasPrefix(oid, ".") {
+	if oid[0] != '.' {
 		return "." + oid
 	}
 	return oid
