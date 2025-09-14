@@ -2,6 +2,7 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -3881,6 +3882,544 @@ app: {
 
 			err = loader.LoadSchema(mixedDir)
 			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("should improve GetFloat coverage using existing working schema", func() {
+			// Use the existing working testSchema and testConfig
+			schemaPath := createTempFile(GinkgoT(), testSchema, ".cue")
+			configPath := createTempFile(GinkgoT(), testConfig, ".yaml")
+
+			manager, err := NewManager(Options{
+				SchemaPath: schemaPath,
+				ConfigPath: configPath,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			defer manager.Close()
+
+			// Test GetFloat with int values (should convert to float64)
+			// server.port is defined as int in testConfig (9090)
+			port, err := manager.GetFloat("server.port")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(port).To(Equal(float64(9090)))
+
+			// Test GetFloat with another int value
+			// database.port is defined as int in testConfig (5432)
+			dbPort, err := manager.GetFloat("database.port")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(dbPort).To(Equal(float64(5432)))
+
+			// Test GetFloat with default value when path doesn't exist
+			nonExistent, err := manager.GetFloat("nonexistent.path", 99.5)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(nonExistent).To(Equal(99.5))
+
+			// Test GetFloat error when path doesn't exist and no default
+			_, err = manager.GetFloat("nonexistent.path")
+			Expect(err).To(HaveOccurred())
+
+			// Test GetFloat error for invalid type conversion (string to float)
+			// app.name is a string in testConfig
+			_, err = manager.GetFloat("app.name")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("not a float"))
+		})
+
+		It("should improve GetBool coverage using existing working schema", func() {
+			// Use the existing working testSchema and testConfig
+			schemaPath := createTempFile(GinkgoT(), testSchema, ".cue")
+			configPath := createTempFile(GinkgoT(), testConfig, ".yaml")
+
+			manager, err := NewManager(Options{
+				SchemaPath: schemaPath,
+				ConfigPath: configPath,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			defer manager.Close()
+
+			// Test GetBool with bool value
+			// app.debug is defined as bool in testConfig (true)
+			debug, err := manager.GetBool("app.debug")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(debug).To(Equal(true))
+
+			// Test GetBool with default value when path doesn't exist
+			nonExistent, err := manager.GetBool("nonexistent.path", false)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(nonExistent).To(Equal(false))
+
+			// Test GetBool error when path doesn't exist and no default
+			_, err = manager.GetBool("nonexistent.path")
+			Expect(err).To(HaveOccurred())
+
+			// Test GetBool error for invalid type conversion (string to bool)
+			// app.name is a string in testConfig
+			_, err = manager.GetBool("app.name")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("not a boolean"))
+		})
+
+		It("should improve GetString coverage with edge cases", func() {
+			// Use the existing working testSchema and testConfig
+			schemaPath := createTempFile(GinkgoT(), testSchema, ".cue")
+			configPath := createTempFile(GinkgoT(), testConfig, ".yaml")
+
+			manager, err := NewManager(Options{
+				SchemaPath: schemaPath,
+				ConfigPath: configPath,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			defer manager.Close()
+
+			// Test GetString with string value
+			// app.name is defined as string in testConfig
+			name, err := manager.GetString("app.name")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(name).To(Equal("test-application"))
+
+			// Test GetString with default value when path doesn't exist
+			nonExistent, err := manager.GetString("nonexistent.path", "default-value")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(nonExistent).To(Equal("default-value"))
+
+			// Test GetString error when path doesn't exist and no default
+			_, err = manager.GetString("nonexistent.path")
+			Expect(err).To(HaveOccurred())
+
+			// Test GetString error for invalid type conversion (int to string)
+			// server.port is an int in testConfig
+			_, err = manager.GetString("server.port")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("not a string"))
+		})
+
+		It("should improve GetStringSlice coverage with various scenarios", func() {
+			// Use the existing working testSchema and testConfig
+			schemaPath := createTempFile(GinkgoT(), testSchema, ".cue")
+
+			// Create config with string slice data
+			configWithSlices := `
+app:
+  name: "test-application"
+  version: "2.1.0"
+  environment: "development"
+  debug: true
+  tags: ["web", "api", "service"]
+  mixed_array: ["string1", "string2"]
+server:
+  host: "0.0.0.0"
+  port: 9090
+  timeout: "45s"
+database:
+  host: "localhost"
+  port: 5432
+  name: "testdb"
+`
+			configPath := createTempFile(GinkgoT(), configWithSlices, ".yaml")
+
+			manager, err := NewManager(Options{
+				SchemaPath: schemaPath,
+				ConfigPath: configPath,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			defer manager.Close()
+
+			// Test GetStringSlice with string slice value
+			tags, err := manager.GetStringSlice("app.tags")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(tags).To(Equal([]string{"web", "api", "service"}))
+
+			// Test GetStringSlice with default value when path doesn't exist
+			nonExistent, err := manager.GetStringSlice("nonexistent.path", []string{"default1", "default2"})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(nonExistent).To(Equal([]string{"default1", "default2"}))
+
+			// Test GetStringSlice error when path doesn't exist and no default
+			_, err = manager.GetStringSlice("nonexistent.path")
+			Expect(err).To(HaveOccurred())
+
+			// Test GetStringSlice error for invalid type conversion (string to slice)
+			// app.name is a string in testConfig
+			_, err = manager.GetStringSlice("app.name")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("not a string slice"))
+		})
+
+		It("should improve GetMap coverage with various scenarios", func() {
+			// Use the existing working testSchema and testConfig
+			schemaPath := createTempFile(GinkgoT(), testSchema, ".cue")
+
+			// Create config with nested map data
+			configWithMaps := `
+app:
+  name: "test-application"
+  version: "2.1.0"
+  environment: "development"
+  debug: true
+  metadata:
+    author: "test-author"
+    description: "test description"
+    tags: ["web", "api"]
+server:
+  host: "0.0.0.0"
+  port: 9090
+  timeout: "45s"
+  settings:
+    max_connections: 100
+    enable_ssl: true
+database:
+  host: "localhost"
+  port: 5432
+  name: "testdb"
+`
+			configPath := createTempFile(GinkgoT(), configWithMaps, ".yaml")
+
+			manager, err := NewManager(Options{
+				SchemaPath: schemaPath,
+				ConfigPath: configPath,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			defer manager.Close()
+
+			// Test GetMap with nested map value
+			metadata, err := manager.GetMap("app.metadata")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(metadata).To(HaveKey("author"))
+			Expect(metadata["author"]).To(Equal("test-author"))
+			Expect(metadata).To(HaveKey("description"))
+			Expect(metadata["description"]).To(Equal("test description"))
+
+			// Test GetMap with server settings
+			settings, err := manager.GetMap("server.settings")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(settings).To(HaveKey("max_connections"))
+			// YAML parses integers as int64, so we need to check for that
+			Expect(settings["max_connections"]).To(Equal(int64(100)))
+			Expect(settings).To(HaveKey("enable_ssl"))
+			Expect(settings["enable_ssl"]).To(Equal(true))
+
+			// Test GetMap error when path doesn't exist
+			_, err = manager.GetMap("nonexistent.path")
+			Expect(err).To(HaveOccurred())
+
+			// Test GetMap error for invalid type conversion (string to map)
+			// app.name is a string in testConfig
+			_, err = manager.GetMap("app.name")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("not a map"))
+
+			// Test that returned map is a copy (modification doesn't affect original)
+			originalMetadata, err := manager.GetMap("app.metadata")
+			Expect(err).ToNot(HaveOccurred())
+			originalMetadata["new_key"] = "new_value"
+
+			// Get the map again and verify it doesn't have the modification
+			freshMetadata, err := manager.GetMap("app.metadata")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(freshMetadata).ToNot(HaveKey("new_key"))
+		})
+
+		It("should improve Validate coverage with validation scenarios", func() {
+			// Use the existing working testSchema and testConfig
+			schemaPath := createTempFile(GinkgoT(), testSchema, ".cue")
+			configPath := createTempFile(GinkgoT(), testConfig, ".yaml")
+
+			manager, err := NewManager(Options{
+				SchemaPath: schemaPath,
+				ConfigPath: configPath,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			defer manager.Close()
+
+			// Test Validate with valid configuration
+			err = manager.Validate()
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("should improve Exists coverage with path existence checks", func() {
+			// Use the existing working testSchema and testConfig
+			schemaPath := createTempFile(GinkgoT(), testSchema, ".cue")
+			configPath := createTempFile(GinkgoT(), testConfig, ".yaml")
+
+			manager, err := NewManager(Options{
+				SchemaPath: schemaPath,
+				ConfigPath: configPath,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			defer manager.Close()
+
+			// Test Exists with existing path
+			exists := manager.Exists("app.name")
+			Expect(exists).To(BeTrue())
+
+			// Test Exists with non-existing path
+			exists = manager.Exists("nonexistent.path")
+			Expect(exists).To(BeFalse())
+		})
+
+		It("should improve StartHotReload coverage with hot reload scenarios", func() {
+			// Use the existing working testSchema and testConfig
+			schemaPath := createTempFile(GinkgoT(), testSchema, ".cue")
+			configPath := createTempFile(GinkgoT(), testConfig, ".yaml")
+
+			// Test with EnableConfigHotReload enabled
+			manager, err := NewManager(Options{
+				SchemaPath:            schemaPath,
+				ConfigPath:            configPath,
+				EnableConfigHotReload: true,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			defer manager.Close()
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			// Test StartHotReload with config hot reload enabled
+			err = manager.StartHotReload(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Test StartHotReload when already started (should return error)
+			err = manager.StartHotReload(ctx)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("hot reload already started"))
+
+			// Test StopHotReload
+			manager.StopHotReload()
+
+			// Test StartHotReload with schema hot reload enabled
+			manager2, err := NewManager(Options{
+				SchemaPath:            schemaPath,
+				ConfigPath:            configPath,
+				EnableSchemaHotReload: true,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			defer manager2.Close()
+
+			err = manager2.StartHotReload(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			manager2.StopHotReload()
+
+			// Test StartHotReload with no hot reload enabled (should return error)
+			manager3, err := NewManager(Options{
+				SchemaPath: schemaPath,
+				ConfigPath: configPath,
+				// No hot reload options enabled
+			})
+			Expect(err).ToNot(HaveOccurred())
+			defer manager3.Close()
+
+			err = manager3.StartHotReload(ctx)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("no files to watch"))
+		})
+
+		It("should improve GetInt coverage with all type scenarios", func() {
+			// Use the existing working testSchema and testConfig
+			schemaPath := createTempFile(GinkgoT(), testSchema, ".cue")
+			configPath := createTempFile(GinkgoT(), testConfig, ".yaml")
+
+			manager, err := NewManager(Options{
+				SchemaPath: schemaPath,
+				ConfigPath: configPath,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			defer manager.Close()
+
+			// Test GetInt with existing int value
+			intValue, err := manager.GetInt("app.version")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(intValue).To(Equal(1))
+
+			// Test GetInt with default value for non-existing path
+			intValue, err = manager.GetInt("nonexistent.int", 42)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(intValue).To(Equal(42))
+
+			// Test GetInt with no default value for non-existing path
+			_, err = manager.GetInt("nonexistent.int")
+			Expect(err).To(HaveOccurred())
+
+			// Test GetInt with wrong type (should return error)
+			_, err = manager.GetInt("app.name") // This is a string
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("is not an integer"))
+		})
+
+		It("should improve copyMap coverage with nested map scenarios", func() {
+			// Use the existing working testSchema and testConfig
+			schemaPath := createTempFile(GinkgoT(), testSchema, ".cue")
+			configPath := createTempFile(GinkgoT(), testConfig, ".yaml")
+
+			manager, err := NewManager(Options{
+				SchemaPath: schemaPath,
+				ConfigPath: configPath,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			defer manager.Close()
+
+			// Test GetMap which internally uses copyMap
+			mapValue, err := manager.GetMap("server")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(mapValue).ToNot(BeNil())
+
+			// Verify the map was copied (not just referenced)
+			// This exercises the copyMap function's deep copy functionality
+			originalMap, err := manager.GetMap("server")
+			Expect(err).ToNot(HaveOccurred())
+
+			// Modify the returned map to ensure it's a copy
+			if originalMap != nil {
+				// This should not affect the internal config since it's a copy
+				originalMap["test_key"] = "test_value"
+			}
+
+			// Get the map again to verify the original wasn't modified
+			freshMap, err := manager.GetMap("server")
+			Expect(err).ToNot(HaveOccurred())
+			if freshMap != nil {
+				_, exists := freshMap["test_key"]
+				Expect(exists).To(BeFalse()) // Should not exist since we modified a copy
+			}
+		})
+
+		It("should improve GetDefaults coverage with schema defaults scenarios", func() {
+			// Use the existing working testSchema and testConfig
+			schemaPath := createTempFile(GinkgoT(), testSchema, ".cue")
+
+			// Create a schema loader directly to test GetDefaults
+			loader := NewSchemaLoader()
+			err := loader.LoadSchema(schemaPath)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Test GetDefaults with loaded schema
+			defaults, err := loader.GetDefaults()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(defaults).ToNot(BeNil())
+
+			// Test GetDefaults with empty schema loader (should return error)
+			emptyLoader := NewSchemaLoader()
+			_, err = emptyLoader.GetDefaults()
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("no schema loaded"))
+		})
+
+		It("should improve newConfigLoader coverage with config loader creation scenarios", func() {
+			// Use the existing working testSchema
+			schemaPath := createTempFile(GinkgoT(), testSchema, ".cue")
+
+			// Test successful config loader creation
+			schemaLoader := NewSchemaLoader()
+			err := schemaLoader.LoadSchema(schemaPath)
+			Expect(err).ToNot(HaveOccurred())
+
+			// This internally calls newConfigLoader - test successful path
+			configPath := createTempFile(GinkgoT(), testConfig, ".yaml")
+			manager, err := NewManager(Options{
+				SchemaPath: schemaPath,
+				ConfigPath: configPath,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			defer manager.Close()
+
+			// Test config loader creation with invalid schema loader (should return error)
+			// Try to create manager with empty schema loader (should fail in newConfigLoader)
+			_, err = NewManager(Options{
+				SchemaContent: "", // Empty schema content should cause error
+				ConfigPath:    configPath,
+			})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("schema content cannot be empty"))
+		})
+
+		It("should improve newHotReloader coverage with hot reloader creation scenarios", func() {
+			// Use the existing working testSchema and testConfig
+			schemaPath := createTempFile(GinkgoT(), testSchema, ".cue")
+			configPath := createTempFile(GinkgoT(), testConfig, ".yaml")
+
+			// Test successful hot reloader creation through NewManager with hot reload enabled
+			manager, err := NewManager(Options{
+				SchemaPath:            schemaPath,
+				ConfigPath:            configPath,
+				EnableSchemaHotReload: true,
+				EnableConfigHotReload: true,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			defer manager.Close()
+
+			// Test starting hot reload (this internally calls newHotReloader)
+			err = manager.StartHotReload(context.Background())
+			Expect(err).ToNot(HaveOccurred())
+
+			// Test that hot reload is working - we can't access internal fields directly
+			// but we can test that StartHotReload succeeded without error
+		})
+
+		It("should improve LoadSchemaContent coverage to 100%", func() {
+			// Test LoadSchemaContent with valid schema content
+			schemaLoader := NewSchemaLoader()
+
+			// Test successful LoadSchemaContent
+			err := schemaLoader.LoadSchemaContent(testSchema)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Test LoadSchemaContent with empty content (should fail)
+			err = schemaLoader.LoadSchemaContent("")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("schema content cannot be empty"))
+
+			// Test LoadSchemaContent with invalid CUE content (should fail)
+			invalidSchema := `
+invalid: {
+	syntax: "this is not valid CUE syntax !!!"
+	broken: [1, 2, 3, "invalid"
+}
+`
+			err = schemaLoader.LoadSchemaContent(invalidSchema)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("failed to compile CUE schema content"))
+		})
+
+		It("should improve findNextVariableExpression coverage to 100%", func() {
+			// Test findNextVariableExpression with various input scenarios
+			// Note: This function is internal, so we test it indirectly through environment variable expansion
+
+			// Create a config with environment variable expressions
+			configWithVars := `
+app:
+  name: "${APP_NAME:-default-app}"
+  version: "${APP_VERSION}"
+  timeout: "${TIMEOUT:-30}"
+server:
+  host: "localhost"
+  port: 8080
+`
+
+			// Set some environment variables for testing
+			os.Setenv("APP_NAME", "test-app")
+			os.Setenv("TIMEOUT", "60")
+			defer func() {
+				os.Unsetenv("APP_NAME")
+				os.Unsetenv("TIMEOUT")
+			}()
+
+			// Create manager with config that has environment variables
+			schemaPath := createTempFile(GinkgoT(), testSchema, ".cue")
+			configPath := createTempFile(GinkgoT(), configWithVars, ".yaml")
+
+			manager, err := NewManager(Options{
+				SchemaPath: schemaPath,
+				ConfigPath: configPath,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			defer manager.Close()
+
+			// Test that environment variable expansion worked
+			appName, err := manager.GetString("app.name")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(appName).To(Equal("test-app"))
+
+			timeout, err := manager.GetString("app.timeout")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(timeout).To(Equal("60"))
 		})
 	})
 })
