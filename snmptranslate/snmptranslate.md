@@ -347,6 +347,7 @@ go test -bench=.
 ```
 
 Test coverage includes:
+
 - Translator initialization and configuration
 - OID translation with various formats
 - Batch translation operations
@@ -383,6 +384,7 @@ The snmptranslate package is optimized for high-performance OID translation:
 - **Memory Optimization**: Efficient data structures and object reuse
 
 Typical performance characteristics:
+
 - **Single Translation**: 1-10 microseconds per OID lookup
 - **Batch Translation**: 100,000+ OIDs per second
 - **Memory Usage**: <50MB for typical MIB libraries with 10,000+ OIDs
