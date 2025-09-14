@@ -3679,5 +3679,208 @@ server: {
 			Expect(err).ToNot(BeNil())
 			Expect(err.Error()).To(ContainSubstring("not a float"))
 		})
+
+		It("should improve skipToNextOccurrence coverage with edge cases", func() {
+			// Test environment variable expansion edge cases that trigger skipToNextOccurrence
+
+			// Set up test environment variables
+			os.Setenv("TEST_VAR", "test_value")
+			os.Setenv("ANOTHER_VAR", "another_value")
+			defer func() {
+				os.Unsetenv("TEST_VAR")
+				os.Unsetenv("ANOTHER_VAR")
+			}()
+
+			// Create config content with various variable patterns
+			configContent := `
+server:
+  # Test case 1: Valid variable expansion
+  host: "${TEST_VAR}"
+
+  # Test case 2: Multiple variables
+  url: "${TEST_VAR}:${ANOTHER_VAR}"
+
+  # Test case 3: Invalid variable (should trigger skipToNextOccurrence)
+  invalid1: "${NONEXISTENT_VAR}"
+
+  # Test case 4: Malformed variable (should trigger skipToNextOccurrence)
+  invalid2: "${INCOMPLETE"
+
+  # Test case 5: Multiple invalid patterns (tests skipToNextOccurrence edge cases)
+  invalid3: "${BAD1}${BAD2}${BAD3}"
+
+  # Test case 6: Valid after invalid (tests skipToNextOccurrence logic)
+  mixed: "${NONEXISTENT}${TEST_VAR}"
+
+  # Test case 7: Edge case - near end of string (tests currentStart+3 >= len(content))
+  short: "${X}"
+`
+			configFile, err := os.CreateTemp("", "skip_test_*.yaml")
+			Expect(err).ToNot(HaveOccurred())
+			defer os.Remove(configFile.Name())
+
+			_, err = configFile.WriteString(configContent)
+			Expect(err).ToNot(HaveOccurred())
+			configFile.Close()
+
+			// Create simple schema that works
+			simpleSchema := `
+package config
+
+server: {
+	host: string
+	url: string
+	invalid1: string
+	invalid2: string
+	invalid3: string
+	mixed: string
+	short: string
+}
+`
+			options := Options{
+				SchemaContent: simpleSchema,
+				ConfigPath:    configFile.Name(),
+			}
+
+			manager, err := NewManager(options)
+			Expect(err).ToNot(HaveOccurred())
+			defer manager.Close()
+
+			// Test that valid expansions work
+			host, err := manager.GetString("server.host")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(host).To(Equal("test_value"))
+
+			// Test multiple variables
+			url, err := manager.GetString("server.url")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(url).To(Equal("test_value:another_value"))
+
+			// Test that invalid variables are handled (should not cause infinite loops)
+			// These should trigger skipToNextOccurrence function
+			invalid1, err := manager.GetString("server.invalid1")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(invalid1).ToNot(BeEmpty()) // Should remain as literal string since variable doesn't exist
+
+			invalid2, err := manager.GetString("server.invalid2")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(invalid2).ToNot(BeEmpty()) // Should remain as literal string since malformed
+
+			invalid3, err := manager.GetString("server.invalid3")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(invalid3).ToNot(BeEmpty()) // Should handle multiple invalid patterns
+
+			mixed, err := manager.GetString("server.mixed")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(mixed).ToNot(BeEmpty()) // Should expand the valid part
+
+			short, err := manager.GetString("server.short")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(short).ToNot(BeEmpty()) // Should handle short patterns near end of string
+		})
+
+		It("should improve loadFromDirectory coverage with directory scenarios", func() {
+			// Test case 1: Empty directory (no CUE files)
+			emptyDir, err := os.MkdirTemp("", "empty_cue_dir_*")
+			Expect(err).ToNot(HaveOccurred())
+			defer os.RemoveAll(emptyDir)
+
+			loader := NewSchemaLoader()
+			err = loader.LoadSchema(emptyDir)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("no CUE files found"))
+
+			// Test case 2: Directory with invalid CUE file
+			invalidDir, err := os.MkdirTemp("", "invalid_cue_dir_*")
+			Expect(err).ToNot(HaveOccurred())
+			defer os.RemoveAll(invalidDir)
+
+			// Create invalid CUE file
+			invalidCueFile := filepath.Join(invalidDir, "invalid.cue")
+			err = os.WriteFile(invalidCueFile, []byte("invalid CUE syntax {{{"), 0644)
+			Expect(err).ToNot(HaveOccurred())
+
+			err = loader.LoadSchema(invalidDir)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("failed to build CUE schema"))
+
+			// Test case 3: Directory with valid CUE files
+			validDir, err := os.MkdirTemp("", "valid_cue_dir_*")
+			Expect(err).ToNot(HaveOccurred())
+			defer os.RemoveAll(validDir)
+
+			// Create valid CUE file
+			validCueFile := filepath.Join(validDir, "schema.cue")
+			validCueContent := `
+package config
+
+server: {
+	host: string | *"localhost"
+	port: int | *8080
+}
+`
+			err = os.WriteFile(validCueFile, []byte(validCueContent), 0644)
+			Expect(err).ToNot(HaveOccurred())
+
+			err = loader.LoadSchema(validDir)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Test case 4: Directory with multiple CUE files
+			multiDir, err := os.MkdirTemp("", "multi_cue_dir_*")
+			Expect(err).ToNot(HaveOccurred())
+			defer os.RemoveAll(multiDir)
+
+			// Create first CUE file
+			file1 := filepath.Join(multiDir, "server.cue")
+			content1 := `
+package config
+
+server: {
+	host: string | *"localhost"
+}
+`
+			err = os.WriteFile(file1, []byte(content1), 0644)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Create second CUE file
+			file2 := filepath.Join(multiDir, "database.cue")
+			content2 := `
+package config
+
+database: {
+	url: string | *"sqlite://memory"
+}
+`
+			err = os.WriteFile(file2, []byte(content2), 0644)
+			Expect(err).ToNot(HaveOccurred())
+
+			err = loader.LoadSchema(multiDir)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Test case 5: Directory with non-CUE files (should be ignored)
+			mixedDir, err := os.MkdirTemp("", "mixed_dir_*")
+			Expect(err).ToNot(HaveOccurred())
+			defer os.RemoveAll(mixedDir)
+
+			// Create CUE file
+			cueFile := filepath.Join(mixedDir, "config.cue")
+			cueContent := `
+package config
+
+app: {
+	name: string | *"test"
+}
+`
+			err = os.WriteFile(cueFile, []byte(cueContent), 0644)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Create non-CUE file (should be ignored)
+			txtFile := filepath.Join(mixedDir, "readme.txt")
+			err = os.WriteFile(txtFile, []byte("This is not a CUE file"), 0644)
+			Expect(err).ToNot(HaveOccurred())
+
+			err = loader.LoadSchema(mixedDir)
+			Expect(err).ToNot(HaveOccurred())
+		})
 	})
 })
