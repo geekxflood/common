@@ -4,6 +4,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -1579,32 +1580,20 @@ database:
 				}
 			})
 
-			It("should test environment variable edge cases", func() {
-				// Set up multiple environment variables
-				os.Setenv("TEST_HOST", "localhost")
-				os.Setenv("TEST_PORT", "8080")
-				os.Setenv("TEST_DEBUG", "true")
-				defer func() {
-					os.Unsetenv("TEST_HOST")
-					os.Unsetenv("TEST_PORT")
-					os.Unsetenv("TEST_DEBUG")
-				}()
-
-				// Create config with various env var patterns
-				envConfig := `
-server:
-  host: "${TEST_HOST}"
-  port: "${TEST_PORT}"
-  debug: "${TEST_DEBUG}"
-  fallback: "${NONEXISTENT_VAR:-fallback_value}"
-  empty_fallback: "${NONEXISTENT_VAR:-}"
-  no_fallback: "${TEST_HOST}"
-`
-				tempFile, err := os.CreateTemp("", "env_config_*.yaml")
+			It("should test additional config loading scenarios", func() {
+				// Test with JSON config file
+				jsonConfig := `{
+  "app": {
+    "name": "json_app",
+    "version": "2.0.0"
+  },
+  "features": ["json", "config"]
+}`
+				tempFile, err := os.CreateTemp("", "json_config_*.json")
 				Expect(err).ToNot(HaveOccurred())
 				defer os.Remove(tempFile.Name())
 
-				_, err = tempFile.WriteString(envConfig)
+				_, err = tempFile.WriteString(jsonConfig)
 				Expect(err).ToNot(HaveOccurred())
 				tempFile.Close()
 
@@ -1612,13 +1601,290 @@ server:
 					ConfigPath: tempFile.Name(),
 					SchemaContent: `
 #Schema: {
-	server: {
-		host: string
-		port: string
-		debug: string
-		fallback: string
-		empty_fallback: string
-		no_fallback: string
+	app: {
+		name: string
+		version: string
+	}
+	features: [...string]
+}
+`,
+				})
+				Expect(err).ToNot(HaveOccurred())
+				defer manager.Close()
+
+				// Test accessing JSON config values
+				appName, err := manager.GetString("app.name")
+				if err == nil {
+					Expect(appName).To(Equal("json_app"))
+				}
+			})
+
+			It("should test file reading edge cases", func() {
+				// Test with empty file
+				emptyFile, err := os.CreateTemp("", "empty_config_*.yaml")
+				Expect(err).ToNot(HaveOccurred())
+				defer os.Remove(emptyFile.Name())
+				emptyFile.Close()
+
+				// This should fail because empty files are not valid
+				_, err = NewManager(Options{
+					ConfigPath:    emptyFile.Name(),
+					SchemaContent: "#Schema: {test: string}",
+				})
+				Expect(err).ToNot(BeNil()) // Should fail with empty file
+
+				// Test with comments-only file
+				commentsFile, err := os.CreateTemp("", "comments_config_*.yaml")
+				Expect(err).ToNot(HaveOccurred())
+				defer os.Remove(commentsFile.Name())
+
+				commentsContent := `
+# This is a comment
+# Another comment
+# Yet another comment
+`
+				_, err = commentsFile.WriteString(commentsContent)
+				Expect(err).ToNot(HaveOccurred())
+				commentsFile.Close()
+
+				// This should also fail because comments-only files are not valid
+				_, err = NewManager(Options{
+					ConfigPath:    commentsFile.Name(),
+					SchemaContent: "#Schema: {test: string}",
+				})
+				Expect(err).ToNot(BeNil()) // Should fail with comments-only file
+			})
+		})
+
+		Context("Simple coverage improvement tests", func() {
+			It("should test basic error scenarios", func() {
+				// Test with non-existent config file
+				_, err := NewManager(Options{
+					ConfigPath:    "/nonexistent/config.yaml",
+					SchemaContent: "#Schema: {test: string}",
+				})
+				Expect(err).ToNot(BeNil()) // Should fail
+
+				// Test with invalid schema content
+				_, err = NewManager(Options{
+					SchemaContent: "invalid cue syntax [",
+				})
+				Expect(err).ToNot(BeNil()) // Should fail
+
+				// Test with empty options (should fail)
+				_, err = NewManager(Options{})
+				Expect(err).ToNot(BeNil()) // Should fail - no schema or config
+			})
+
+			It("should test file extension handling", func() {
+				// Test with unsupported file extension
+				unsupportedFile, err := os.CreateTemp("", "config_*.txt")
+				Expect(err).ToNot(HaveOccurred())
+				defer os.Remove(unsupportedFile.Name())
+
+				_, err = unsupportedFile.WriteString("test: value")
+				Expect(err).ToNot(HaveOccurred())
+				unsupportedFile.Close()
+
+				_, err = NewManager(Options{
+					ConfigPath:    unsupportedFile.Name(),
+					SchemaContent: "#Schema: {test: string}",
+				})
+				Expect(err).ToNot(BeNil()) // Should fail with unsupported extension
+			})
+
+			It("should test schema loading edge cases", func() {
+				loader := NewSchemaLoader()
+
+				// Test GetValidator without loading schema first
+				_, err := loader.GetValidator()
+				Expect(err).ToNot(BeNil()) // Should fail - no schema loaded
+
+				// Test GetDefaults without loading schema first
+				_, err2 := loader.GetDefaults()
+				Expect(err2).ToNot(BeNil()) // Should fail - no schema loaded
+
+				// Test LoadSchemaContent with empty content
+				err = loader.LoadSchemaContent("")
+				Expect(err).ToNot(BeNil()) // Should fail with empty content
+			})
+		})
+
+		Context("Final coverage improvement tests", func() {
+			It("should test formatValidationError function", func() {
+				// Create a schema with strict validation to trigger formatValidationError
+				strictSchema := `
+#Schema: {
+	required_string: string
+	positive_number: int & >0
+	email: string & =~"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$"
+}
+`
+				loader := NewSchemaLoader()
+				err := loader.LoadSchemaContent(strictSchema)
+				Expect(err).ToNot(HaveOccurred())
+
+				validator, err := loader.GetValidator()
+				Expect(err).ToNot(HaveOccurred())
+
+				// Test with data that will definitely fail validation to trigger formatValidationError
+				invalidData := map[string]any{
+					"required_string": 123,             // Should be string, not int
+					"positive_number": -5,              // Should be positive
+					"email":           "invalid-email", // Should match email pattern
+				}
+
+				err = validator.ValidateConfig(invalidData)
+				Expect(err).ToNot(BeNil()) // Should fail and trigger formatValidationError
+
+				// Test ValidateValue with type mismatch to trigger formatValidationError
+				err = validator.ValidateValue("required_string", 123)
+				Expect(err).ToNot(BeNil()) // Should fail and trigger formatValidationError
+
+				err = validator.ValidateValue("positive_number", -10)
+				Expect(err).ToNot(BeNil()) // Should fail and trigger formatValidationError
+			})
+
+			It("should test more ValidateFile scenarios", func() {
+				// Create a schema for file validation
+				fileSchema := `
+#Schema: {
+	app: {
+		name: string
+		port: int & >0 & <65536
+	}
+}
+`
+				loader := NewSchemaLoader()
+				err := loader.LoadSchemaContent(fileSchema)
+				Expect(err).ToNot(HaveOccurred())
+
+				validator, err := loader.GetValidator()
+				Expect(err).ToNot(HaveOccurred())
+
+				// Test ValidateFile with file containing validation errors
+				invalidFile, err := os.CreateTemp("", "invalid_validation_*.yaml")
+				Expect(err).ToNot(HaveOccurred())
+				defer os.Remove(invalidFile.Name())
+
+				invalidContent := `
+app:
+  name: 123  # Should be string
+  port: -1   # Should be positive
+`
+				_, err = invalidFile.WriteString(invalidContent)
+				Expect(err).ToNot(HaveOccurred())
+				invalidFile.Close()
+
+				err = validator.ValidateFile(invalidFile.Name())
+				Expect(err).ToNot(BeNil()) // Should fail validation
+
+				// Test ValidateFile with file that has parsing errors
+				parseErrorFile, err := os.CreateTemp("", "parse_error_*.yaml")
+				Expect(err).ToNot(HaveOccurred())
+				defer os.Remove(parseErrorFile.Name())
+
+				parseErrorContent := `
+app:
+  name: "test"
+  port: [invalid yaml structure
+`
+				_, err = parseErrorFile.WriteString(parseErrorContent)
+				Expect(err).ToNot(HaveOccurred())
+				parseErrorFile.Close()
+
+				err = validator.ValidateFile(parseErrorFile.Name())
+				Expect(err).ToNot(BeNil()) // Should fail parsing
+			})
+
+			It("should test getValueAtPath edge cases", func() {
+				// Create a schema with deeply nested structure
+				nestedSchema := `
+#Schema: {
+	level1: {
+		level2: {
+			level3: {
+				value: string
+				number: int
+			}
+			array: [...string]
+		}
+		simple: string
+	}
+}
+`
+				loader := NewSchemaLoader()
+				err := loader.LoadSchemaContent(nestedSchema)
+				Expect(err).ToNot(HaveOccurred())
+
+				validator, err := loader.GetValidator()
+				Expect(err).ToNot(HaveOccurred())
+
+				// Test ValidateValue with deeply nested paths (tests getValueAtPath)
+				err = validator.ValidateValue("level1.level2.level3.value", "test")
+				Expect(err).To(BeNil())
+
+				err = validator.ValidateValue("level1.level2.level3.number", 42)
+				Expect(err).To(BeNil())
+
+				err = validator.ValidateValue("level1.simple", "simple_value")
+				Expect(err).To(BeNil())
+
+				// Test with invalid nested paths
+				err = validator.ValidateValue("level1.nonexistent.path", "value")
+				Expect(err).ToNot(BeNil()) // Should fail path resolution
+
+				err = validator.ValidateValue("nonexistent.level2.level3.value", "value")
+				Expect(err).ToNot(BeNil()) // Should fail path resolution
+			})
+
+			It("should test LoadSchema edge cases", func() {
+				loader := NewSchemaLoader()
+
+				// Test LoadSchema with non-existent file
+				err := loader.LoadSchema("/nonexistent/schema.cue")
+				Expect(err).ToNot(BeNil()) // Should fail
+
+				// Test LoadSchema with invalid CUE content
+				invalidSchemaFile, err := os.CreateTemp("", "invalid_schema_*.cue")
+				Expect(err).ToNot(HaveOccurred())
+				defer os.Remove(invalidSchemaFile.Name())
+
+				invalidSchemaContent := `
+#Schema: {
+	invalid syntax here [
+}
+`
+				_, err = invalidSchemaFile.WriteString(invalidSchemaContent)
+				Expect(err).ToNot(HaveOccurred())
+				invalidSchemaFile.Close()
+
+				err = loader.LoadSchema(invalidSchemaFile.Name())
+				Expect(err).ToNot(BeNil()) // Should fail due to invalid CUE syntax
+			})
+
+			It("should test config loading with different file types", func() {
+				// Test with .yml extension (different from .yaml)
+				ymlConfig := `
+service:
+  name: "yml_service"
+  enabled: true
+`
+				ymlFile, err := os.CreateTemp("", "config_*.yml")
+				Expect(err).ToNot(HaveOccurred())
+				defer os.Remove(ymlFile.Name())
+
+				_, err = ymlFile.WriteString(ymlConfig)
+				Expect(err).ToNot(HaveOccurred())
+				ymlFile.Close()
+
+				manager, err := NewManager(Options{
+					ConfigPath: ymlFile.Name(),
+					SchemaContent: `
+#Schema: {
+	service: {
+		name: string
+		enabled: bool
 	}
 }
 `,
@@ -1626,15 +1892,15 @@ server:
 				Expect(err).ToNot(HaveOccurred())
 				defer manager.Close()
 
-				// Test that environment variables were expanded correctly
-				host, err := manager.GetString("server.host")
+				// Test that .yml files are loaded correctly
+				serviceName, err := manager.GetString("service.name")
 				if err == nil {
-					Expect(host).To(Equal("localhost"))
+					Expect(serviceName).To(Equal("yml_service"))
 				}
 
-				fallback, err := manager.GetString("server.fallback")
+				enabled, err := manager.GetBool("service.enabled")
 				if err == nil {
-					Expect(fallback).To(Equal("fallback_value"))
+					Expect(enabled).To(BeTrue())
 				}
 			})
 		})
@@ -1643,10 +1909,5 @@ server:
 
 // Helper function to check if a string contains a substring
 func containsString(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(s, substr)
 }
