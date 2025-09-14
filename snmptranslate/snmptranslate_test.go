@@ -479,3 +479,191 @@ END`
 		_, _ = translator.TranslateBatch(testOIDs)
 	}
 }
+
+// Additional tests for uncovered functions to reach 90% coverage
+var _ = Describe("Coverage Improvements", func() {
+	var (
+		translator Translator
+		tempDir    string
+		trie       *OIDTrie
+		cache      *Cache
+	)
+
+	BeforeEach(func() {
+		translator = New()
+		trie = NewOIDTrie()
+		cache = NewCache(10)
+
+		var err error
+		tempDir, err = os.MkdirTemp("", "snmptranslate_coverage_test")
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	AfterEach(func() {
+		if translator != nil {
+			translator.Close()
+		}
+		if tempDir != "" {
+			os.RemoveAll(tempDir)
+		}
+	})
+
+	Describe("OIDTrie Additional Methods", func() {
+		BeforeEach(func() {
+			// Add some test data
+			trie.Insert(".1.3.6.1.6.3.1.1.5.1", "coldStart")
+			trie.Insert(".1.3.6.1.6.3.1.1.5.2", "warmStart")
+			trie.Insert(".1.3.6.1.6.3.1.1.5.3", "linkDown")
+		})
+
+		It("should clear all entries", func() {
+			Expect(trie.Size()).To(Equal(3))
+
+			trie.Clear()
+
+			Expect(trie.Size()).To(Equal(0))
+			name := trie.Lookup(".1.3.6.1.6.3.1.1.5.1")
+			Expect(name).To(Equal(""))
+		})
+
+		It("should provide depth statistics", func() {
+			stats := trie.GetDepthStats()
+			Expect(stats).NotTo(BeNil())
+			Expect(len(stats)).To(BeNumerically(">", 0))
+		})
+
+		It("should check if OID exists", func() {
+			exists := trie.Exists(".1.3.6.1.6.3.1.1.5.1")
+			Expect(exists).To(BeTrue())
+
+			exists = trie.Exists(".1.2.3.4.5.6.7.8.9")
+			Expect(exists).To(BeFalse())
+		})
+
+		// Note: OIDTrie doesn't have Delete method, so we skip this test
+		// The Delete method is available on Cache instead
+	})
+
+	Describe("Cache Additional Methods", func() {
+		BeforeEach(func() {
+			// Add some test data
+			cache.Set("key1", "value1")
+			cache.Set("key2", "value2")
+			cache.Set("key3", "value3")
+		})
+
+		It("should report size correctly", func() {
+			size := cache.Size()
+			Expect(size).To(Equal(3))
+		})
+
+		It("should report capacity correctly", func() {
+			capacity := cache.Capacity()
+			Expect(capacity).To(Equal(10))
+		})
+
+		It("should get top entries", func() {
+			// Access some entries to create usage patterns
+			cache.Get("key1")
+			cache.Get("key1") // Access key1 twice
+			cache.Get("key2")
+
+			entries := cache.GetTopEntries(2)
+			Expect(len(entries)).To(BeNumerically("<=", 2))
+		})
+
+		It("should resize cache", func() {
+			originalCapacity := cache.Capacity()
+			Expect(originalCapacity).To(Equal(10))
+
+			cache.Resize(5)
+			newCapacity := cache.Capacity()
+			Expect(newCapacity).To(Equal(5))
+
+			// Size should be adjusted if it exceeds new capacity
+			size := cache.Size()
+			Expect(size).To(BeNumerically("<=", 5))
+		})
+
+		It("should warmup cache", func() {
+			// Clear cache first
+			cache.Clear()
+			Expect(cache.Size()).To(Equal(0))
+
+			// Warmup with test data
+			warmupData := map[string]string{
+				"warmup1": "value1",
+				"warmup2": "value2",
+				"warmup3": "value3",
+			}
+
+			cache.Warmup(warmupData)
+			Expect(cache.Size()).To(Equal(3))
+
+			value, found := cache.Get("warmup1")
+			Expect(found).To(BeTrue())
+			Expect(value).To(Equal("value1"))
+		})
+
+		It("should get common OID translations", func() {
+			translations := GetCommonOIDTranslations()
+			Expect(translations).NotTo(BeNil())
+			// Should contain some common SNMP OIDs
+			Expect(len(translations)).To(BeNumerically(">", 0))
+		})
+
+		It("should delete entries from cache", func() {
+			cache.Set("deleteMe", "value")
+			_, found := cache.Get("deleteMe")
+			Expect(found).To(BeTrue())
+
+			deleted := cache.Delete("deleteMe")
+			Expect(deleted).To(BeTrue())
+
+			_, found = cache.Get("deleteMe")
+			Expect(found).To(BeFalse())
+
+			// Try to delete non-existent entry
+			deleted = cache.Delete("nonExistent")
+			Expect(deleted).To(BeFalse())
+		})
+	})
+
+	Describe("MIB Parser Additional Methods", func() {
+		It("should parse directory of MIB files", func() {
+			// Create test MIB files in directory
+			createTestMIBFile(tempDir, "TEST1.mib", testMIBContent)
+			createTestMIBFile(tempDir, "TEST2.mib", customMIBContent)
+
+			parser := NewMIBParser()
+			entries, err := parser.ParseDirectory(tempDir)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(entries).NotTo(BeNil())
+		})
+
+		It("should handle empty directory", func() {
+			emptyDir := filepath.Join(tempDir, "empty")
+			err := os.MkdirAll(emptyDir, 0755)
+			Expect(err).NotTo(HaveOccurred())
+
+			parser := NewMIBParser()
+			entries, err := parser.ParseDirectory(emptyDir)
+			// Should not error on empty directory
+			Expect(err).NotTo(HaveOccurred())
+			Expect(len(entries)).To(Equal(0))
+		})
+
+		It("should handle directory with non-MIB files", func() {
+			// Create non-MIB file
+			nonMIBFile := filepath.Join(tempDir, "not-a-mib.txt")
+			err := os.WriteFile(nonMIBFile, []byte("This is not a MIB file"), 0644)
+			Expect(err).NotTo(HaveOccurred())
+
+			parser := NewMIBParser()
+			entries, err := parser.ParseDirectory(tempDir)
+			// Should not error, just skip non-MIB files
+			Expect(err).NotTo(HaveOccurred())
+			Expect(len(entries)).To(Equal(0))
+		})
+	})
+})
