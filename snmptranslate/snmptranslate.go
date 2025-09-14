@@ -97,10 +97,6 @@ type OIDEntry struct {
 	Module      string `json:"module,omitempty"`
 }
 
-// =============================================================================
-// OID Trie Implementation
-// =============================================================================
-
 // OIDTrie implements a trie (prefix tree) data structure optimized for OID storage and lookup.
 // It provides O(log n) insertion and lookup operations where n is the depth of the OID tree.
 //
@@ -138,10 +134,6 @@ type TrieNode struct {
 	depth int
 }
 
-// =============================================================================
-// Cache Implementation
-// =============================================================================
-
 // Cache implements a thread-safe LRU (Least Recently Used) cache for OID translations.
 // It provides fast access to frequently requested OID translations while automatically
 // evicting least recently used entries when the cache reaches its maximum size.
@@ -176,10 +168,6 @@ type CacheStats struct {
 	LastAccess   time.Time `json:"last_access"`
 	LastEviction time.Time `json:"last_eviction"`
 }
-
-// =============================================================================
-// MIB Parser Implementation
-// =============================================================================
 
 // MIBParser handles parsing of MIB files to extract OID-to-name mappings.
 // It supports basic MIB syntax including OBJECT-TYPE and NOTIFICATION-TYPE definitions.
@@ -252,10 +240,6 @@ func NewWithConfig(config Config) Translator {
 		maxCacheSize: config.MaxCacheSize,
 	}
 }
-
-// =============================================================================
-// OID Trie Constructor and Methods
-// =============================================================================
 
 // NewOIDTrie creates a new empty OID trie.
 func NewOIDTrie() *OIDTrie {
@@ -509,10 +493,6 @@ func (t *OIDTrie) Exists(oid string) bool {
 
 	return current.isLeaf
 }
-
-// =============================================================================
-// Cache Constructor and Methods
-// =============================================================================
 
 // NewCache creates a new LRU cache with the specified capacity.
 // If capacity is 0 or negative, a default capacity of 1000 is used.
@@ -804,10 +784,6 @@ func GetCommonOIDTranslations() map[string]string {
 		".1.3.6.1.2.1.1.7.0":   "sysServices",
 	}
 }
-
-// =============================================================================
-// MIB Parser Constructor and Methods
-// =============================================================================
 
 // NewMIBParser creates a new MIB parser with compiled regular expressions.
 func NewMIBParser() *MIBParser {
@@ -1215,10 +1191,6 @@ func (p *MIBParser) ValidateMIBFile(filename string) error {
 
 	return nil
 }
-
-// =============================================================================
-// Helper Functions
-// =============================================================================
 
 // parseOID converts an OID string to a slice of integer components.
 // Handles both formats: "1.3.6.1" and ".1.3.6.1"

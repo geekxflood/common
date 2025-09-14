@@ -46,7 +46,7 @@ import (
 	"github.com/gosnmp/gosnmp"
 )
 
-// Config interface for trap processing configuration.
+// Config defines the interface for trap processing configuration.
 // This interface defines the configuration contract required by the trap
 // processing components, abstracting away the underlying configuration
 // implementation and making the code more testable.
