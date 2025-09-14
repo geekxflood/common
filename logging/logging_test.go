@@ -619,21 +619,25 @@ var _ = Describe("Coverage Improvements", func() {
 	// Additional tests to improve coverage to 90%
 	Describe("Coverage Improvement Tests", func() {
 		Context("Get function edge cases", func() {
-			It("should handle Get with various component types", func() {
-				// Test Get with different component types
-				logger1 := Get("test-component", "service")
+			It("should handle Get function and component loggers", func() {
+				// Test Get function (global logger)
+				globalLogger := Get()
+				Expect(globalLogger).ToNot(BeNil())
+
+				// Test NewComponentLogger with different component types
+				logger1 := NewComponentLogger("test-component", "service")
 				Expect(logger1).ToNot(BeNil())
 				Expect(logger1.GetComponent()).To(Equal("test-component"))
 				Expect(logger1.GetComponentType()).To(Equal("service"))
 
-				// Test Get with empty component type (should use default)
-				logger2 := Get("test-component", "")
+				// Test NewComponentLogger with empty component type
+				logger2 := NewComponentLogger("test-component", "")
 				Expect(logger2).ToNot(BeNil())
 				Expect(logger2.GetComponent()).To(Equal("test-component"))
-				Expect(logger2.GetComponentType()).To(Equal("component"))
+				Expect(logger2.GetComponentType()).To(Equal(""))
 
-				// Test Get with same component name but different types
-				logger3 := Get("test-component", "worker")
+				// Test NewComponentLogger with same component name but different types
+				logger3 := NewComponentLogger("test-component", "worker")
 				Expect(logger3).ToNot(BeNil())
 				Expect(logger3.GetComponent()).To(Equal("test-component"))
 				Expect(logger3.GetComponentType()).To(Equal("worker"))
@@ -642,7 +646,7 @@ var _ = Describe("Coverage Improvements", func() {
 
 		Context("Context logging methods", func() {
 			It("should handle context logging with various scenarios", func() {
-				logger := Get("context-test", "service")
+				logger := NewComponentLogger("context-test", "service")
 				ctx := context.Background()
 
 				// Test DebugContext with different argument types
@@ -667,7 +671,7 @@ var _ = Describe("Coverage Improvements", func() {
 			})
 
 			It("should handle context logging with nil context", func() {
-				logger := Get("nil-context-test", "service")
+				logger := NewComponentLogger("nil-context-test", "service")
 
 				// Test with nil context - should not panic
 				logger.DebugContext(nil, "Debug with nil context")
