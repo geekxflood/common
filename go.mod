@@ -3,7 +3,7 @@ module github.com/geekxflood/common
 go 1.25.0
 
 require (
-	cuelang.org/go v0.14.1
+	cuelang.org/go v0.14.2
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/gosnmp/gosnmp v1.42.1
 	github.com/onsi/ginkgo/v2 v2.25.3
